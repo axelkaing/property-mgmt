@@ -486,7 +486,7 @@ async function renderDashboard() {
       let balBadgeHtml = '';
       if (r.status !== 'vacant' && r.tenant_id) {
         const monthBal = r.total_bill != null
-          ? r.total_bill - (r.total_paid_month || 0)
+          ? r.total_bill - (parseFloat(r.total_paid_month) || 0)
           : null;
         if (monthBal != null && Math.abs(monthBal) >= 5) {
           if (monthBal > 0) {
