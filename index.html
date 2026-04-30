@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Property Management</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <!-- Login Screen -->
+  <div id="login-screen" class="login-screen hidden">
+    <div class="login-card">
+      <div class="login-logo">🏠</div>
+      <h1 id="login-title">Property Management</h1>
+      <form id="login-form">
+        <label id="lbl-password" for="pwd-input">Password</label>
+        <input type="password" id="pwd-input" placeholder="Enter password" autocomplete="current-password" />
+        <div id="login-error" class="error-msg hidden"></div>
+        <button type="submit" id="login-btn">Login</button>
+      </form>
+      <div class="lang-toggle-login">
+        <button onclick="setLang('en')" id="lang-en-btn" class="lang-btn active">EN</button>
+        <button onclick="setLang('tc')" id="lang-tc-btn" class="lang-btn">中文</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Main App -->
+  <div id="app" class="app hidden">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <span class="sidebar-logo">🏠</span>
+        <span class="sidebar-title" data-i18n="app_title">Property Mgmt</span>
+      </div>
+      <div class="sidebar-fy">
+        <span class="sidebar-fy-label">Fiscal Year</span>
+        <select id="global-fy-select" onchange="changeGlobalFY(this.value)"></select>
+      </div>
+      <nav class="sidebar-nav">
+        <a href="#" class="nav-item active" data-view="dashboard" data-i18n="nav_dashboard">Dashboard</a>
+        <a href="#" class="nav-item" data-view="billing" data-i18n="nav_billing">Monthly Billing</a>
+        <a href="#" class="nav-item" data-view="payments" data-i18n="nav_payments">Payments</a>
+        <a href="#" class="nav-item" data-view="expenses" data-i18n="nav_expenses">Expenses</a>
+        <a href="#" class="nav-item" data-view="summary" data-i18n="nav_summary">Annual Summary</a>
+      </nav>
+      <div class="sidebar-footer">
+        <button class="lang-btn-sidebar" onclick="setLang('en')" id="sb-lang-en">EN</button>
+        <button class="lang-btn-sidebar" onclick="setLang('tc')" id="sb-lang-tc">中文</button>
+        <button class="logout-btn" id="logout-btn" data-i18n="nav_logout">Logout</button>
+      </div>
+    </aside>
+
+    <!-- Main content -->
+    <main class="main-content">
+      <div id="view-container"></div>
+    </main>
+  </div>
+
+  <!-- Modal -->
+  <div id="modal-overlay" class="modal-overlay hidden">
+    <div class="modal" id="modal">
+      <div class="modal-header">
+        <h2 id="modal-title"></h2>
+        <button class="modal-close" onclick="closeModal()">✕</button>
+      </div>
+      <div id="modal-body"></div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
