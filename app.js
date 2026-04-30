@@ -385,7 +385,7 @@ function methodLabel(m) {
 }
 
 // Generate <option> list for past N months from today (for period-adjustment dropdown)
-function generateMonthOptions(selectedMonth, count = 3) {
+function generateMonthOptions(selectedMonth, count = 24) {
   const now = new Date();
   const opts = [];
   for (let i = 0; i < count; i++) {
@@ -486,13 +486,13 @@ async function renderDashboard() {
       let balBadgeHtml = '';
       if (r.status !== 'vacant' && r.tenant_id) {
         const monthBal = r.total_bill != null
-          ? r.total_bill - (parseFloat(r.total_paid_month) || 0)
+          ? r.total_bill - (r.total_paid_month || 0)
           : null;
         if (monthBal != null && Math.abs(monthBal) >= 5) {
           if (monthBal > 0) {
             balBadgeHtml = `<span class="bal-badge bal-badge-owed" style="background:#dc2626;color:#fff" title="${t('outstanding_lbl')}">+${hk(monthBal)}</span>`;
           } else {
-            balBadgeHtml = `<span class="bal-badge bal-badge-credit" style="background-color:#DBEAFE;color:#1D4ED8;font-weight:600" title="${t('balance_credit')}"><span style="color:#1D4ED8;font-weight:600">${hk(-monthBal)}</span></span>`;
+            balBadgeHtml = `<span class="bal-badge bal-badge-credit" title="${t('balance_credit')}">${hk(-monthBal)}</span>`;
           }
         }
       }
