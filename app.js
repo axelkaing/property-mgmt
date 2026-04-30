@@ -60,7 +60,8 @@ const STRINGS = {
     method_online:    'Online Banking',
     method_other:     'Other',
     tenant_lbl:       'Tenant',
-    del_confirm:      'Delete this record?',
+    del_confirm:       'Delete this record?',
+    del_confirm_split: 'This payment has a linked adjustment record. Delete both?',
     filter_month:     'Filter by Month',
     filter_tenant:    'Filter by Tenant',
     all_tenants:      'All Tenants',
@@ -213,7 +214,8 @@ const STRINGS = {
     method_online:    '網上銀行',
     method_other:     '其他',
     tenant_lbl:       '租客',
-    del_confirm:      '確定刪除此記錄？',
+    del_confirm:       '確定刪除此記錄？',
+    del_confirm_split: '此付款有關聯的調整記錄，確定一併刪除？',
     filter_month:     '按月份篩選',
     filter_tenant:    '按租客篩選',
     all_tenants:      '所有租客',
@@ -1031,6 +1033,9 @@ async function renderPayments() {
       const verifyBadge = isVerified
         ? `<span class="verify-badge verify-ok" title="${t('verified_lbl')}">✓</span>`
         : `<span class="verify-badge verify-pending" title="${t('pending_verify')}" style="cursor:pointer" onclick="markPaymentVerified(${p.id})">⏳</span>`;
+      const splitBadge = p.split_group
+        ? `<span style="font-size:10px;color:#6b7280;margin-left:4px" title="Linked split record">⇄</span>`
+        : '';
       payRowsArr.push(`
         <tr>
           <td>${p.property_code}</td>
@@ -1040,10 +1045,10 @@ async function renderPayments() {
           <td>${fmtDate(p.payment_date)}</td>
           <td class="td-money">${hk(p.amount)}</td>
           <td>${methodLabel(p.method)}</td>
-          <td style="word-wrap:break-word;white-space:normal">${p.notes || ''}</td>
+          <td style="word-wrap:break-word;white-space:normal">${p.notes || ''}${splitBadge}</td>
           <td style="text-align:center">${verifyBadge}</td>
           <td style="white-space:nowrap">
-            <button class="btn btn-danger btn-sm" onclick="deletePayment(${p.id})">✕</button>
+            <button class="btn btn-danger btn-sm" onclick="deletePayment(${p.id}, ${!!p.split_group})">✕</button>
           </td>
         </tr>`);
     });
@@ -1184,11 +1189,13 @@ async function submitPayment(e) {
     const adjAmount = parseFloat($$('overpay-adj-amount')?.value) || window._payOverpayDiff;
     const adjMonth  = $$('overpay-adj-month')?.value || null;
     const mainAmt   = amount - adjAmount;
+    const splitGroup = mainAmt > 0.005 ? crypto.randomUUID() : null;
 
     if (mainAmt > 0.005) {
       await api.post('/api/payments', {
         tenant_id: tenantId, billing_month: billingMonth, payment_date: payDate,
         amount: Math.round(mainAmt * 100) / 100, method, notes, verified, proof_image: window._proofImage || null,
+        split_group: splitGroup,
       });
     }
     await api.post('/api/payments', {
@@ -1196,6 +1203,7 @@ async function submitPayment(e) {
       amount: Math.round(adjAmount * 100) / 100, method,
       notes: notes || `Period adjustment${adjMonth ? ` for ${fmtMonth(adjMonth)}` : ''}`,
       verified, proof_image: null,
+      split_group: splitGroup,
     });
   } else {
     await api.post('/api/payments', {
@@ -1375,8 +1383,9 @@ async function markPaymentVerified(id) {
   renderPayments();
 }
 
-async function deletePayment(id) {
-  if (!confirm(t('del_confirm'))) return;
+async function deletePayment(id, hasSplit = false) {
+  const msg = hasSplit ? t('del_confirm_split') : t('del_confirm');
+  if (!confirm(msg)) return;
   await api.delete(`/api/payments/${id}`);
   renderPayments();
 }
