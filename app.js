@@ -488,12 +488,16 @@ async function renderDashboard() {
         const monthBal = r.total_bill != null
           ? r.total_bill - (r.total_paid_month || 0)
           : null;
+        const outstanding = r.outstanding_balance || 0;
         if (monthBal != null && Math.abs(monthBal) >= 5) {
           if (monthBal > 0) {
             balBadgeHtml = `<span class="bal-badge bal-badge-owed" style="background:#dc2626;color:#fff" title="${t('outstanding_lbl')}">+${hk(monthBal)}</span>`;
           } else {
             balBadgeHtml = `<span class="bal-badge bal-badge-credit" title="${t('balance_credit')}">${hk(-monthBal)}</span>`;
           }
+        } else if (monthBal !== null && outstanding < -5) {
+          // Month is settled but a period adjustment to a different billing_month left a carry-over credit
+          balBadgeHtml = `<span class="bal-badge bal-badge-credit" title="${t('balance_credit')}">${hk(-outstanding)}</span>`;
         }
       }
 
