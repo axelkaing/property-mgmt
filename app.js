@@ -328,7 +328,7 @@ const GRACE_DAYS = 7;
 
 // ── API Client ────────────────────────────────────────────────────────────────
 
-const BASE = 'https://property-mgmt.axelvion.workers.dev';
+const BASE = '';
 
 async function apiFetch(path, opts = {}) {
   const res = await fetch(BASE + path, {
