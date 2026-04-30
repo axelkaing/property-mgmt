@@ -1959,10 +1959,33 @@ window.S                  = S;
 // ── Init ─────────────────────────────────────────────────────────────────────
 
 document.addEventListener('DOMContentLoaded', () => {
+  const hamburgerBtn = $$('hamburger-btn');
+  const sidebarEl = document.querySelector('.sidebar');
+  const sidebarOverlay = $$('sidebar-overlay');
+
+  function openSidebar() {
+    sidebarEl?.classList.add('open');
+    sidebarOverlay?.classList.add('visible');
+    if (hamburgerBtn) hamburgerBtn.textContent = '✕';
+  }
+
+  function closeSidebar() {
+    sidebarEl?.classList.remove('open');
+    sidebarOverlay?.classList.remove('visible');
+    if (hamburgerBtn) hamburgerBtn.textContent = '☰';
+  }
+
+  hamburgerBtn?.addEventListener('click', () => {
+    sidebarEl?.classList.contains('open') ? closeSidebar() : openSidebar();
+  });
+
+  sidebarOverlay?.addEventListener('click', closeSidebar);
+
   document.querySelectorAll('.nav-item').forEach(el => {
     el.addEventListener('click', e => {
       e.preventDefault();
       navigate(el.dataset.view);
+      closeSidebar();
     });
   });
 
