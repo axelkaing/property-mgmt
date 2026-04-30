@@ -537,9 +537,9 @@ async function renderDashboard() {
     <div class="page-header">
       <h2>${t('nav_dashboard')}</h2>
       <div class="month-nav">
-        <button class="btn btn-ghost btn-sm" onclick="navDashMonth(-1)">&#8592;</button>
+        <button class="btn btn-ghost btn-sm" onclick="navDashMonth(-1)" ${dashMonth <= '2026-04' ? 'disabled' : ''}>&#8592;</button>
         <span class="month-nav-label">${t('viewing_month')}: <strong>${fmtMonth(dashMonth)}</strong></span>
-        <button class="btn btn-ghost btn-sm" onclick="navDashMonth(1)">&#8594;</button>
+        <button class="btn btn-ghost btn-sm" onclick="navDashMonth(1)" ${dashMonth >= ym() ? 'disabled' : ''}>&#8594;</button>
       </div>
     </div>
     <div class="stats-grid">
@@ -575,9 +575,12 @@ async function renderDashboard() {
 }
 
 function navDashMonth(dir) {
+  const MIN_MONTH = '2026-04';
+  const MAX_MONTH = ym();
   const [y, m] = (S.data.dashMonth || ym()).split('-').map(Number);
-  const d = new Date(y, m - 1 + dir);
-  S.data.dashMonth = ym(d);
+  const next = ym(new Date(y, m - 1 + dir));
+  if (next < MIN_MONTH || next > MAX_MONTH) return;
+  S.data.dashMonth = next;
   renderDashboard();
 }
 
