@@ -495,9 +495,13 @@ async function renderDashboard() {
           } else {
             balBadgeHtml = `<span class="bal-badge bal-badge-credit" title="${t('balance_credit')}">${hk(-monthBal)}</span>`;
           }
-        } else if (monthBal !== null && outstanding < -5) {
-          // Month is settled but a period adjustment to a different billing_month left a carry-over credit
-          balBadgeHtml = `<span class="bal-badge bal-badge-credit" title="${t('balance_credit')}">${hk(-outstanding)}</span>`;
+        } else if (monthBal !== null && Math.abs(outstanding) >= 1) {
+          // Month within $5 threshold but outstanding_balance reflects a real carry-over difference
+          if (outstanding > 0) {
+            balBadgeHtml = `<span class="bal-badge bal-badge-owed" style="background:#dc2626;color:#fff" title="${t('outstanding_lbl')}">+${hk(outstanding)}</span>`;
+          } else {
+            balBadgeHtml = `<span class="bal-badge bal-badge-credit" title="${t('balance_credit')}">${hk(-outstanding)}</span>`;
+          }
         }
       }
 
