@@ -1,7 +1,10 @@
+const { put, del, get: getBlobFile } = require('@vercel/blob');
+
 const CF_ACCOUNT_ID  = process.env.CF_ACCOUNT_ID;
 const CF_DATABASE_ID = process.env.CF_DATABASE_ID || '666f4f48-11b2-4075-9081-2e167357ee0a';
 const CF_API_TOKEN   = process.env.CF_API_TOKEN;
 const AUTH_PASSWORD  = process.env.AUTH_PASSWORD  || 'BigSister2026';
+const VIEW_PASSWORD  = process.env.VIEW_PASSWORD  || 'view123';
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -84,6 +87,11 @@ async function ensureSchema() {
     `ALTER TABLE tenants ADD COLUMN outstanding_balance REAL DEFAULT 0`,
     `CREATE TABLE IF NOT EXISTS _schema_flags (key TEXT PRIMARY KEY, value TEXT)`,
     `ALTER TABLE payments ADD COLUMN split_group TEXT`,
+    `ALTER TABLE expenses ADD COLUMN unit_label TEXT`,
+    `ALTER TABLE tenants ADD COLUMN phone TEXT`,
+    `ALTER TABLE tenants ADD COLUMN remark TEXT`,
+    `ALTER TABLE tenants ADD COLUMN contract_url TEXT`,
+    `ALTER TABLE expenses ADD COLUMN slip_url TEXT`,
   ];
   for (const sql of migrations) {
     try { await d1Query(sql); } catch { /* column already exists */ }
@@ -138,6 +146,25 @@ async function ensureSchema() {
       await DB.prepare(`INSERT OR REPLACE INTO _schema_flags (key, value) VALUES ('balance_reset_v4', '1')`).run();
     }
   } catch { /* ignore */ }
+
+  try {
+    const flag5 = await DB.prepare(`SELECT value FROM _schema_flags WHERE key='unit_label_backfill_v1'`).first();
+    if (!flag5) {
+      await DB.prepare(`
+        UPDATE expenses
+        SET unit_label = (
+          SELECT p.code || ' ' || r.room_label
+          FROM properties p
+          JOIN rooms r ON r.property_id = p.id
+          JOIN tenants t ON t.room_id = r.id AND t.active = 1
+          WHERE p.id = expenses.property_id
+          ORDER BY r.room_label
+          LIMIT 1
+        )
+        WHERE unit_label IS NULL OR unit_label = ''`).run();
+      await DB.prepare(`INSERT OR REPLACE INTO _schema_flags (key, value) VALUES ('unit_label_backfill_v1', '1')`).run();
+    }
+  } catch { /* ignore */ }
 }
 
 // ── Router ────────────────────────────────────────────────────────────────────
@@ -147,27 +174,40 @@ async function route(req, res, path, url) {
 
   if (path === '/api/auth/login' && m === 'POST') return login(req, res);
 
-  const token = (req.headers['authorization'] || '').replace('Bearer ', '');
-  if (token !== AUTH_PASSWORD) return sendErr(res, 'Unauthorized', 401);
+  const token    = (req.headers['authorization'] || '').replace('Bearer ', '');
+  const isAdmin  = token === AUTH_PASSWORD;
+  const isViewer = token === VIEW_PASSWORD;
+  if (!isAdmin && !isViewer) return sendErr(res, 'Unauthorized', 401);
 
+  // Read-only routes (viewer and admin):
   if (path === '/api/dashboard'              && m === 'GET')    return dashboard(res, url);
   if (path === '/api/properties'             && m === 'GET')    return getProperties(res);
+  if (path === '/api/tenants/directory'      && m === 'GET')    return getTenantsDirectory(res);
   if (path === '/api/tenants'                && m === 'GET')    return getTenants(res, url);
-  if (/^\/api\/tenants\/\d+$/.test(path)    && m === 'PUT')    return updateTenant(req, res, seg(path, 3));
   if (path === '/api/billing'                && m === 'GET')    return getBilling(res, url);
-  if (path === '/api/billing'                && m === 'POST')   return createBilling(req, res);
   if (path === '/api/billing/last-reading'   && m === 'GET')    return getLastReading(res, url);
   if (path === '/api/billing/invoice'        && m === 'GET')    return getBillingInvoice(res, url);
-  if (/^\/api\/billing\/\d+$/.test(path)    && m === 'DELETE') return deleteBilling(res, seg(path, 3));
   if (path === '/api/payments'               && m === 'GET')    return getPayments(res, url);
-  if (path === '/api/payments'               && m === 'POST')   return createPayment(req, res);
-  if (/^\/api\/payments\/\d+$/.test(path)   && m === 'PUT')    return updatePayment(req, res, seg(path, 3));
-  if (/^\/api\/payments\/\d+$/.test(path)   && m === 'DELETE') return deletePayment(res, seg(path, 3));
   if (path === '/api/expenses'               && m === 'GET')    return getExpenses(res, url);
-  if (path === '/api/expenses'               && m === 'POST')   return createExpense(req, res);
-  if (/^\/api\/expenses\/\d+$/.test(path)   && m === 'DELETE') return deleteExpense(res, seg(path, 3));
   if (path === '/api/summary'                && m === 'GET')    return getSummary(res, url);
   if (/^\/api\/receipt\/\d+$/.test(path)    && m === 'GET')    return getReceipt(res, seg(path, 3));
+  if (/^\/api\/contracts\/\d+\/view$/.test(path)       && m === 'GET') return viewContract(req, res, seg(path, 3));
+  if (/^\/api\/expenses\/\d+\/slip\/view$/.test(path)  && m === 'GET') return viewExpenseSlip(req, res, seg(path, 3));
+  if (/^\/api\/payments\/\d+\/proof$/.test(path)       && m === 'GET') return viewPaymentProof(req, res, seg(path, 3));
+
+  // Write routes (admin only):
+  if (!isAdmin) return sendErr(res, 'Forbidden', 403);
+
+  if (/^\/api\/tenants\/\d+$/.test(path)     && m === 'PUT')    return updateTenant(req, res, seg(path, 3));
+  if (/^\/api\/contracts\/\d+$/.test(path)   && m === 'POST')   return uploadContract(req, res, seg(path, 3));
+  if (/^\/api\/expenses\/\d+\/slip$/.test(path) && m === 'POST') return uploadExpenseSlip(req, res, seg(path, 3));
+  if (path === '/api/billing'                 && m === 'POST')   return createBilling(req, res);
+  if (/^\/api\/billing\/\d+$/.test(path)     && m === 'DELETE') return deleteBilling(res, seg(path, 3));
+  if (path === '/api/payments'                && m === 'POST')   return createPayment(req, res);
+  if (/^\/api\/payments\/\d+$/.test(path)    && m === 'PUT')    return updatePayment(req, res, seg(path, 3));
+  if (/^\/api\/payments\/\d+$/.test(path)    && m === 'DELETE') return deletePayment(res, seg(path, 3));
+  if (path === '/api/expenses'                && m === 'POST')   return createExpense(req, res);
+  if (/^\/api\/expenses\/\d+$/.test(path)    && m === 'DELETE') return deleteExpense(res, seg(path, 3));
 
   return sendErr(res, 'Not found', 404);
 }
@@ -178,14 +218,17 @@ function seg(path, n) { return path.split('/')[n]; }
 
 async function login(req, res) {
   const { password } = req.body || {};
-  if (password !== AUTH_PASSWORD) return sendErr(res, 'Invalid password', 401);
-  return sendJson(res, { token: AUTH_PASSWORD });
+  if (password === AUTH_PASSWORD) return sendJson(res, { token: AUTH_PASSWORD, role: 'admin' });
+  if (password === VIEW_PASSWORD)  return sendJson(res, { token: VIEW_PASSWORD,  role: 'viewer' });
+  return sendErr(res, 'Invalid password', 401);
 }
 
 // ── Dashboard ─────────────────────────────────────────────────────────────────
 
 async function dashboard(res, url) {
   const currentMonth = url.searchParams.get('month') || new Date().toISOString().slice(0, 7);
+  const [y, mo] = currentMonth.split('-').map(Number);
+  const fyStart = `${mo >= 4 ? y : y - 1}-04`;
 
   const [propRows, roomRows, expiringRows, rentRow, paidRows] = await Promise.all([
     DB.prepare(`
@@ -205,11 +248,19 @@ async function dashboard(res, url) {
         COALESCE((
           SELECT SUM(p.amount) FROM payments p
           WHERE p.tenant_id = t.id AND p.billing_month = ?
-        ), 0) as total_paid_month
+        ), 0) as total_paid_month,
+        COALESCE((
+          SELECT SUM(mr2.total_bill) FROM meter_readings mr2
+          WHERE mr2.room_id = r.id AND mr2.billing_month < ? AND mr2.billing_month >= ?
+        ), 0) - COALESCE((
+          SELECT SUM(p2.amount) FROM payments p2
+          WHERE p2.tenant_id = t.id AND p2.billing_month IS NOT NULL
+            AND p2.billing_month < ? AND p2.billing_month >= ?
+        ), 0) as prev_outstanding
       FROM rooms r
       LEFT JOIN tenants t ON t.room_id = r.id AND t.active = 1
       LEFT JOIN meter_readings mr ON mr.room_id = r.id AND mr.billing_month = ?
-      ORDER BY r.property_id, r.room_label`).bind(currentMonth, currentMonth).all(),
+      ORDER BY r.property_id, r.room_label`).bind(currentMonth, currentMonth, fyStart, currentMonth, fyStart, currentMonth).all(),
 
     DB.prepare(`
       SELECT t.id, t.name, t.contract_end, t.contract_start,
@@ -270,12 +321,73 @@ async function updateTenant(req, res, id) {
   const d = req.body || {};
   await DB.prepare(`
     UPDATE tenants SET name=?, rent=?, elec_rate=?, water_type=?, water_rate=?,
-      contract_start=?, contract_end=?, deposit=?, commission=?
+      contract_start=?, contract_end=?, deposit=?, commission=?, phone=?, remark=?
     WHERE id=?`)
     .bind(d.name, d.rent, d.elec_rate, d.water_type, d.water_rate,
-          d.contract_start, d.contract_end, d.deposit, d.commission, id)
+          d.contract_start, d.contract_end, d.deposit, d.commission,
+          d.phone || null, d.remark || null, id)
     .run();
   return sendJson(res, { success: true });
+}
+
+async function getTenantsDirectory(res) {
+  const rows = await DB.prepare(`
+    SELECT r.id as room_id, r.room_label, r.status,
+      p.id as property_id, p.code as property_code,
+      t.id as tenant_id, t.name, t.phone, t.rent, t.deposit,
+      t.contract_start, t.contract_end, t.remark, t.contract_url,
+      t.elec_rate, t.water_type, t.water_rate, t.commission
+    FROM rooms r
+    JOIN properties p ON p.id = r.property_id
+    LEFT JOIN tenants t ON t.room_id = r.id AND t.active = 1
+    ORDER BY p.id, r.room_label`).all();
+  return sendJson(res, rows.results);
+}
+
+async function uploadContract(req, res, tenantId) {
+  const { base64, contentType, filename } = req.body || {};
+  if (!base64 || !contentType) return sendErr(res, 'base64 and contentType required');
+
+  const allowed = ['application/pdf', 'image/jpeg', 'image/png'];
+  if (!allowed.includes(contentType)) return sendErr(res, 'Only PDF, JPG, PNG files are allowed');
+
+  const ext = contentType === 'application/pdf' ? '.pdf'
+            : contentType === 'image/png' ? '.png' : '.jpg';
+  const pathname = `contracts/tenant-${tenantId}${ext}`;
+
+  const existing = await DB.prepare(`SELECT contract_url FROM tenants WHERE id=?`).bind(tenantId).first();
+  if (existing?.contract_url) {
+    try { await del(existing.contract_url); } catch { /* already gone */ }
+  }
+
+  const buffer = Buffer.from(base64, 'base64');
+  const blob = await put(pathname, buffer, {
+    access: 'private',
+    contentType,
+    addRandomSuffix: true,
+  });
+
+  await DB.prepare(`UPDATE tenants SET contract_url=? WHERE id=?`).bind(blob.url, tenantId).run();
+  return sendJson(res, { success: true, url: blob.url });
+}
+
+async function viewContract(req, res, tenantId) {
+  const tenant = await DB.prepare(`SELECT contract_url FROM tenants WHERE id=?`).bind(tenantId).first();
+  if (!tenant?.contract_url) return sendErr(res, 'No contract found', 404);
+
+  const token = process.env.BLOB_READ_WRITE_TOKEN;
+  const blobRes = await fetch(tenant.contract_url, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!blobRes.ok) return sendErr(res, 'Contract not accessible', 404);
+
+  const contentType = blobRes.headers.get('content-type') || 'application/octet-stream';
+  const buffer = await blobRes.arrayBuffer();
+
+  Object.entries(CORS).forEach(([k, v]) => res.setHeader(k, v));
+  res.setHeader('Content-Type', contentType);
+  res.setHeader('Content-Disposition', 'inline');
+  return res.status(200).send(Buffer.from(buffer));
 }
 
 // ── Billing ───────────────────────────────────────────────────────────────────
@@ -505,7 +617,10 @@ async function getPayments(res, url) {
   const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
 
   const rows = await DB.prepare(`
-    SELECT p.*, t.name as tenant_name, r.room_label, r.property_id, pr.code as property_code
+    SELECT p.id, p.tenant_id, p.billing_month, p.payment_date, p.amount, p.method,
+           p.notes, p.verified, p.split_group,
+           CASE WHEN p.proof_image IS NOT NULL AND p.proof_image != '' THEN 1 ELSE 0 END as has_proof,
+           t.name as tenant_name, r.room_label, r.property_id, pr.code as property_code
     FROM payments p
     JOIN tenants t ON t.id = p.tenant_id
     JOIN rooms r ON r.id = t.room_id
@@ -539,7 +654,7 @@ async function createPayment(req, res) {
           WHERE p.tenant_id = ? AND p.billing_month = ?), 0)
         as net
     `).bind(d.tenant_id, d.billing_month, d.tenant_id, d.billing_month).first();
-    if (monthNet && Math.abs(monthNet.net) > 0 && Math.abs(monthNet.net) < 5) {
+    if (monthNet && Math.abs(monthNet.net) > 0 && Math.abs(monthNet.net) < 0.5) {
       await DB.prepare(`UPDATE tenants SET outstanding_balance = outstanding_balance - ? WHERE id=?`)
         .bind(monthNet.net, d.tenant_id).run();
     }
@@ -577,10 +692,14 @@ async function deletePayment(res, id) {
 
 async function getExpenses(res, url) {
   const propId = url.searchParams.get('property_id');
+  const month  = url.searchParams.get('month');
   const fy     = url.searchParams.get('fy');
   const conditions = [], binds = [];
 
-  if (fy) {
+  if (month) {
+    conditions.push(`e.expense_date LIKE ?`);
+    binds.push(`${month}-%`);
+  } else if (fy) {
     conditions.push(`e.expense_date >= ? AND e.expense_date <= ?`);
     binds.push(`${fy}-04-01`, `${parseInt(fy)+1}-03-31`);
   } else {
@@ -601,18 +720,83 @@ async function getExpenses(res, url) {
 
 async function createExpense(req, res) {
   const d = req.body || {};
-  if (!d.property_id) return sendErr(res, 'property_id is required');
   const result = await DB.prepare(`
-    INSERT INTO expenses (property_id, expense_date, category, amount, description)
-    VALUES (?,?,?,?,?)`)
-    .bind(d.property_id, d.expense_date, d.category, d.amount, d.description || null)
+    INSERT INTO expenses (property_id, expense_date, category, amount, description, unit_label)
+    VALUES (?,?,?,?,?,?)`)
+    .bind(d.property_id || null, d.expense_date, d.category, d.amount, d.description || null, d.unit_label || null)
     .run();
   return sendJson(res, { success: true, id: result.meta.last_row_id });
 }
 
 async function deleteExpense(res, id) {
+  const exp = await DB.prepare(`SELECT slip_url FROM expenses WHERE id=?`).bind(id).first();
+  if (exp?.slip_url) {
+    try { await del(exp.slip_url); } catch { /* already gone */ }
+  }
   await DB.prepare(`DELETE FROM expenses WHERE id=?`).bind(id).run();
   return sendJson(res, { success: true });
+}
+
+async function uploadExpenseSlip(req, res, expenseId) {
+  const { base64, contentType } = req.body || {};
+  if (!base64 || !contentType) return sendErr(res, 'base64 and contentType required');
+
+  const allowed = ['application/pdf', 'image/jpeg', 'image/png'];
+  if (!allowed.includes(contentType)) return sendErr(res, 'Only PDF, JPG, PNG files are allowed');
+
+  const ext = contentType === 'application/pdf' ? '.pdf'
+            : contentType === 'image/png' ? '.png' : '.jpg';
+  const pathname = `expense-slips/expense-${expenseId}${ext}`;
+
+  const existing = await DB.prepare(`SELECT slip_url FROM expenses WHERE id=?`).bind(expenseId).first();
+  if (existing?.slip_url) {
+    try { await del(existing.slip_url); } catch { /* already gone */ }
+  }
+
+  const buffer = Buffer.from(base64, 'base64');
+  const blob = await put(pathname, buffer, {
+    access: 'private',
+    contentType,
+    addRandomSuffix: true,
+  });
+
+  await DB.prepare(`UPDATE expenses SET slip_url=? WHERE id=?`).bind(blob.url, expenseId).run();
+  return sendJson(res, { success: true, url: blob.url });
+}
+
+async function viewExpenseSlip(req, res, expenseId) {
+  const expense = await DB.prepare(`SELECT slip_url FROM expenses WHERE id=?`).bind(expenseId).first();
+  if (!expense?.slip_url) return sendErr(res, 'No slip found', 404);
+
+  const token = process.env.BLOB_READ_WRITE_TOKEN;
+  const blobRes = await fetch(expense.slip_url, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!blobRes.ok) return sendErr(res, 'Slip not accessible', 404);
+
+  const contentType = blobRes.headers.get('content-type') || 'application/octet-stream';
+  const buffer = await blobRes.arrayBuffer();
+
+  Object.entries(CORS).forEach(([k, v]) => res.setHeader(k, v));
+  res.setHeader('Content-Type', contentType);
+  res.setHeader('Content-Disposition', 'inline');
+  return res.status(200).send(Buffer.from(buffer));
+}
+
+async function viewPaymentProof(req, res, paymentId) {
+  const row = await DB.prepare(`SELECT proof_image FROM payments WHERE id=?`).bind(paymentId).first();
+  if (!row?.proof_image) return sendErr(res, 'No proof found', 404);
+
+  const base64 = row.proof_image;
+  const matches = base64.match(/^data:([^;]+);base64,(.+)$/);
+  if (!matches) return sendErr(res, 'Invalid proof data', 400);
+  const contentType = matches[1];
+  const buffer = Buffer.from(matches[2], 'base64');
+
+  Object.entries(CORS).forEach(([k, v]) => res.setHeader(k, v));
+  res.setHeader('Content-Type', contentType);
+  res.setHeader('Content-Disposition', 'inline');
+  return res.status(200).send(buffer);
 }
 
 // ── Annual Summary ────────────────────────────────────────────────────────────
@@ -660,6 +844,8 @@ async function getSummary(res, url) {
   const insurance     = catMap['insurance']    || 0;
   const stampDuty     = catMap['stamp_duty']   || 0;
   const handlingFee   = catMap['handling_fee'] || 0;
+  const electricity   = catMap['electricity']  || 0;
+  const water         = catMap['water']        || 0;
   const other         = catMap['other']        || 0;
   const totalExpenses = Object.values(catMap).reduce((s, v) => s + v, 0);
   const netIncome     = totalIncome - totalExpenses;
@@ -672,6 +858,42 @@ async function getSummary(res, url) {
     propExpMap[r.property_id][r.category] = r.total;
   });
 
+  // General expenses: those with no property assigned (property_id IS NULL → key null)
+  const genExp = propExpMap[null] || {};
+  const generalExpenses = {
+    govtRent:    genExp['govt_rent']    || 0,
+    govtRates:   genExp['govt_rates']   || 0,
+    repairs:     genExp['repairs']      || 0,
+    insurance:   genExp['insurance']    || 0,
+    stampDuty:   genExp['stamp_duty']   || 0,
+    handlingFee: genExp['handling_fee'] || 0,
+    electricity: genExp['electricity']  || 0,
+    water:       genExp['water']        || 0,
+    other:       genExp['other']        || 0,
+    total:       Object.values(genExp).reduce((s, v) => s + v, 0),
+  };
+
+  // Property expenses: aggregate by category across all non-null property_id entries
+  const propExpByCategory = {};
+  Object.entries(propExpMap).forEach(([propId, cats]) => {
+    if (propId === 'null') return;
+    Object.entries(cats).forEach(([cat, amt]) => {
+      propExpByCategory[cat] = (propExpByCategory[cat] || 0) + amt;
+    });
+  });
+  const propertyExpenses = {
+    govtRent:    propExpByCategory['govt_rent']    || 0,
+    govtRates:   propExpByCategory['govt_rates']   || 0,
+    repairs:     propExpByCategory['repairs']      || 0,
+    insurance:   propExpByCategory['insurance']    || 0,
+    stampDuty:   propExpByCategory['stamp_duty']   || 0,
+    handlingFee: propExpByCategory['handling_fee'] || 0,
+    electricity: propExpByCategory['electricity']  || 0,
+    water:       propExpByCategory['water']        || 0,
+    other:       propExpByCategory['other']        || 0,
+    total:       Object.values(propExpByCategory).reduce((s, v) => s + v, 0),
+  };
+
   const propBreakdown = incomeRows.results.map(p => {
     const exp = propExpMap[p.id] || {};
     const pGovtRent  = exp['govt_rent']    || 0;
@@ -680,6 +902,8 @@ async function getSummary(res, url) {
     const pInsurance = exp['insurance']    || 0;
     const pStamp     = exp['stamp_duty']   || 0;
     const pHandling  = exp['handling_fee'] || 0;
+    const pElec      = exp['electricity']  || 0;
+    const pWater     = exp['water']        || 0;
     const pOther     = exp['other']        || 0;
     const pTotalExp  = Object.values(exp).reduce((s, v) => s + v, 0);
     const pTaxBase   = Math.max(0, p.total_income - pGovtRent);
@@ -687,7 +911,8 @@ async function getSummary(res, url) {
       id: p.id, code: p.code, address: p.address,
       income: p.total_income,
       expenses: { govtRent: pGovtRent, govtRates: pGovtRates, repairs: pRepairs,
-                  insurance: pInsurance, stampDuty: pStamp, handlingFee: pHandling, other: pOther },
+                  insurance: pInsurance, stampDuty: pStamp, handlingFee: pHandling,
+                  electricity: pElec, water: pWater, other: pOther },
       totalExpenses: pTotalExp,
       netIncome: p.total_income - pTotalExp,
       taxBase: pTaxBase,
@@ -700,10 +925,13 @@ async function getSummary(res, url) {
     income: { byProperty: incomeRows.results, total: totalIncome },
     expenses: { byCategory: catMap, total: totalExpenses },
     summary: {
-      totalIncome, govtRent, govtRates, repairs, insurance, stampDuty, handlingFee, other,
+      totalIncome, govtRent, govtRates, repairs, insurance, stampDuty, handlingFee,
+      electricity, water, other,
       totalExpenses, netIncome, perOwner: netIncome / 5,
       taxBase, propertyTax,
     },
     propBreakdown,
+    generalExpenses,
+    propertyExpenses,
   });
 }
