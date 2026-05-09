@@ -1261,7 +1261,7 @@ async function renderPayments() {
         ? `<span class="verify-badge verify-ok" title="${t('verified_lbl')}">✓</span>`
         : isViewer()
           ? `<span class="verify-badge verify-pending" title="${t('pending_verify')}">✗</span>`
-          : `<span class="verify-badge verify-pending" title="${t('pending_verify')}" style="cursor:pointer" onclick="markPaymentVerified(${p.id})">✗</span>`;
+          : `<button class="verify-badge verify-btn" title="${t('mark_verified')}" onclick="markPaymentVerified(${p.id})">✓</button>`;
       const splitBadge = p.split_group
         ? `<span style="font-size:10px;color:#6b7280;margin-left:4px" title="Linked split record">⇄</span>`
         : '';
