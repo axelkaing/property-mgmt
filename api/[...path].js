@@ -150,6 +150,19 @@ async function ensureSchema() {
   } catch { /* ignore */ }
 
   try {
+    const flagBrv5 = await DB.prepare(`SELECT value FROM _schema_flags WHERE key='balance_reset_v5'`).first();
+    if (!flagBrv5) {
+      await DB.prepare(`UPDATE tenants SET outstanding_balance = 0`).run();
+      await DB.prepare(`
+        UPDATE tenants SET outstanding_balance = (
+          COALESCE((SELECT SUM(mr.total_bill) FROM meter_readings mr WHERE mr.room_id = tenants.room_id), 0)
+          - COALESCE((SELECT SUM(p.amount) FROM payments p WHERE p.tenant_id = tenants.id), 0)
+        )`).run();
+      await DB.prepare(`INSERT OR REPLACE INTO _schema_flags (key, value) VALUES ('balance_reset_v5', '1')`).run();
+    }
+  } catch { /* ignore */ }
+
+  try {
     const flag5 = await DB.prepare(`SELECT value FROM _schema_flags WHERE key='unit_label_backfill_v1'`).first();
     if (!flag5) {
       await DB.prepare(`
