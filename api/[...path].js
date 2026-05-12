@@ -568,11 +568,15 @@ async function getBilling(res, url) {
       CASE WHEN t.id IS NOT NULL THEN
         COALESCE((
           SELECT SUM(mr2.total_bill) FROM meter_readings mr2
-          WHERE mr2.room_id = mr.room_id AND mr2.billing_month <= mr.billing_month
+          WHERE mr2.room_id = mr.room_id
+            AND mr2.billing_month <= mr.billing_month
+            AND mr2.billing_month >= ${fyStartExpr}
         ), 0) - COALESCE((
           SELECT SUM(pay2.amount) FROM payments pay2
           WHERE pay2.tenant_id = t.id
-            AND (pay2.billing_month IS NULL OR pay2.billing_month <= mr.billing_month)
+            AND pay2.billing_month IS NOT NULL
+            AND pay2.billing_month <= mr.billing_month
+            AND pay2.billing_month >= ${fyStartExpr}
         ), 0)
       ELSE 0 END as running_balance,
       CASE WHEN t.id IS NOT NULL THEN
