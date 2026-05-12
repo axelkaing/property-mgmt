@@ -114,6 +114,7 @@ const STRINGS = {
     cat_handling_fee: 'Handling / Agent Fee',
     cat_electricity:  'Electricity',
     cat_water:        'Water',
+    cat_garbage:      'Garbage',
     cat_stamp_duty:   'Stamp Duty',
     cat_other:        'Other',
     property_lbl:     'Property',
@@ -174,6 +175,7 @@ const STRINGS = {
     lease_end_lbl:    'Lease End',
     upload_contract:  'Upload Contract',
     view_contract:    'View Contract',
+    remove_contract:  'Remove Contract',
     uploading_lbl:    'Uploading…',
   },
   tc: {
@@ -289,6 +291,7 @@ const STRINGS = {
     cat_handling_fee: '代理費 / 手續費',
     cat_electricity:  '電費',
     cat_water:        '水費',
+    cat_garbage:      '垃圾費',
     cat_stamp_duty:   '印花稅',
     cat_other:        '其他',
     property_lbl:     '物業',
@@ -349,6 +352,7 @@ const STRINGS = {
     lease_end_lbl:    '租約結束',
     upload_contract:  '上傳合約',
     view_contract:    '查看合約',
+    remove_contract:  '刪除合約',
     uploading_lbl:    '上傳中…',
   },
 };
@@ -366,8 +370,15 @@ const S = {
 function t(k) { return STRINGS[S.lang][k] || k; }
 function isViewer() { return S.role === 'viewer'; }
 
-// Due day per property: 1=Woosung, 2=Parkes, 3=Jordan, 4=Pilkem, 5=CarPark
-const PROP_DUE_DAYS = { 1: 1, 2: 20, 3: 1, 4: 20, 5: 1 };
+// Due day per property: 1=Woosung, 2=Parkes, 3=Jordan, 4=Pilkem(5F/SH), 5=CarPark, 6=4F/SH
+const PROP_DUE_DAYS = { 1: 1, 2: 20, 3: 1, 4: 20, 5: 1, 6: 20 };
+
+// Format unit code: "2F/WS"-"A" → "2F/WS-A", "5F/SH"+"Flat" → "5F/SH", "CarP"+"P99" → "CarP P99"
+function fmtUnit(propCode, roomLabel) {
+  if (!roomLabel || roomLabel === 'Flat') return propCode;
+  if (/^[A-Z]$/.test(roomLabel)) return `${propCode}-${roomLabel}`;
+  return `${propCode} ${roomLabel}`;
+}
 const GRACE_DAYS = 7;
 
 // ── API Client ────────────────────────────────────────────────────────────────
@@ -400,8 +411,27 @@ const api = {
 
 function $$(n) { return document.getElementById(n); }
 function hk(n) { return 'HK$' + Number(n || 0).toLocaleString('en-HK', { minimumFractionDigits: 0, maximumFractionDigits: 2 }); }
-function fmtDate(d) { if (!d) return '–'; const loc = S.lang === 'tc' ? 'zh-HK' : 'en-US'; return new Date(d + 'T00:00:00').toLocaleDateString(loc, { day: 'numeric', month: 'short', year: 'numeric' }); }
-function fmtMonth(m) { if (!m) return '–'; const [y, mo] = m.split('-'); const loc = S.lang === 'tc' ? 'zh-HK' : 'en-US'; return new Date(+y, +mo - 1).toLocaleDateString(loc, { month: 'long', year: 'numeric' }); }
+function fmtDate(d) { if (!d) return '–'; return new Date(d + 'T00:00:00').toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' }); }
+function fmtMonth(m) { if (!m) return '–'; const [y, mo] = m.split('-'); return new Date(+y, +mo - 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' }); }
+
+function openMonthPicker(wrap) {
+  const inp = wrap.querySelector('input[type=month]');
+  if (!inp) return;
+  try { inp.showPicker(); } catch(e) { inp.focus(); }
+}
+
+function mkMonthInput(currentMonth, minMo, onChangeFn) {
+  return `<div class="month-input-wrap" onclick="openMonthPicker(this)">
+    <span class="month-input-icon">📅</span>
+    <span class="month-input-label">${fmtMonth(currentMonth)}</span>
+    <input type="month" value="${currentMonth}" min="${minMo || '2026-01'}" max="${ym()}"
+      onchange="${onChangeFn}(this.value)" />
+  </div>`;
+}
+
+function changeDashMonth(m) { S.data.dashMonth = m; renderDashboard(); }
+function changePayMonth(m) { S.data.payMonth = m; renderPayments(); }
+function changeExpMonth(m) { S.data.expMonth = m; S.data.expUnit = ''; S.data.expCat = ''; renderExpenses(); }
 function ym(d = new Date()) { return d.toISOString().slice(0, 7); }
 function today() { return new Date().toISOString().slice(0, 10); }
 function fyLabel(fy) { return `${fy}/${String(parseInt(fy) + 1).slice(-2)}`; }
@@ -416,7 +446,7 @@ function catLabel(c) {
     govt_rates: t('cat_govt_rates'), govt_rent: t('cat_govt_rent'),
     handling_fee: t('cat_handling_fee'), stamp_duty: t('cat_stamp_duty'),
     electricity: t('cat_electricity'), water: t('cat_water'),
-    other: t('cat_other'),
+    garbage: t('cat_garbage'), other: t('cat_other'),
   };
   return map[c] || c;
 }
@@ -486,15 +516,17 @@ async function renderView() {
 async function renderDashboard() {
   if (!S.data.dashMonth) S.data.dashMonth = ym();
   const dashMonth = S.data.dashMonth;
+  $$('view-container').innerHTML = `<div class="empty-state">${t('loading')}</div>`;
   const data = await api.get(`/api/dashboard?month=${dashMonth}`);
   const { properties, rooms, expiring, totalMonthlyRent, paymentStatusMap = {} } = data;
 
   const roomsByProp = {};
   rooms.forEach(r => { (roomsByProp[r.property_id] = roomsByProp[r.property_id] || []).push(r); });
 
-  const totalRooms = properties.reduce((s, p) => s + (p.total_rooms || 0), 0);
-  const totalOcc   = properties.reduce((s, p) => s + (p.occupied || 0), 0);
-  const totalVac   = properties.reduce((s, p) => s + (p.vacant || 0), 0);
+  const totalRooms     = properties.reduce((s, p) => s + (p.total_rooms || 0), 0);
+  const totalOcc       = properties.reduce((s, p) => s + (p.occupied || 0), 0);
+  const totalVac       = properties.reduce((s, p) => s + (p.vacant || 0), 0);
+  const totalCollected = rooms.reduce((s, r) => s + (r.total_paid_month || 0), 0);
 
   const alertsHtml = expiring.length === 0
     ? `<p class="text-muted" style="padding:12px 0">${t('no_alerts')}</p>`
@@ -505,7 +537,7 @@ async function renderDashboard() {
           <div class="alert-item">
             <span class="alert-icon">⚠️</span>
             <div class="alert-text">
-              <strong>${e.name} — ${e.property_code} ${e.room_label}</strong>
+              <strong>${e.name} — ${fmtUnit(e.property_code, e.room_label)}</strong>
               <span>${t('contract_lbl')}: ${fmtDate(e.contract_start)} – ${fmtDate(e.contract_end)}</span>
             </div>
             <span class="alert-days ${d < 0 ? 'overdue' : ''}">${daysTxt}</span>
@@ -579,9 +611,7 @@ async function renderDashboard() {
     <div class="section mb-16">
       <div class="section-header">
         <h3>${t('filter_month')}</h3>
-        <div style="display:flex;gap:10px;align-items:center">
-          <input type="month" value="${dashMonth}" min="2026-04" max="${ym()}" onchange="S.data.dashMonth=this.value; renderDashboard()" />
-        </div>
+        ${mkMonthInput(dashMonth, '2026-01', 'changeDashMonth')}
       </div>
     </div>
     <div class="stats-grid">
@@ -600,6 +630,10 @@ async function renderDashboard() {
       <div class="stat-card amber">
         <div class="stat-label">${t('monthly_rent')}</div>
         <div class="stat-value" style="font-size:20px">${hk(totalMonthlyRent)}</div>
+      </div>
+      <div class="stat-card green">
+        <div class="stat-label">${S.lang === 'tc' ? '本月已收' : 'Collected'}</div>
+        <div class="stat-value" style="font-size:20px">${hk(totalCollected)}</div>
       </div>
     </div>
 
@@ -636,7 +670,7 @@ async function renderTenants() {
   units.forEach(u => { window._tenantDirData[u.room_id] = u; });
 
   const cards = units.map(u => {
-    const unitLabel = `${u.property_code} ${u.room_label}`;
+    const unitLabel = fmtUnit(u.property_code, u.room_label);
     const isVacant = !u.tenant_id;
     const leasePeriod = u.contract_start || u.contract_end
       ? `${fmtDateDMY(u.contract_start)} — ${fmtDateDMY(u.contract_end)}`
@@ -675,7 +709,7 @@ async function renderTenants() {
         </div>
         ${!isVacant ? `
         <div class="tenant-card-actions">
-          ${u.contract_url ? `<button class="btn btn-ghost btn-sm" onclick="viewTenantContract(${u.tenant_id})">📄 ${t('view_contract')}</button>` : ''}
+          ${u.contract_url ? `<span class="contract-btn-group"><button class="btn btn-ghost btn-sm" onclick="viewTenantContract(${u.tenant_id})">📄 ${t('view_contract')}</button>${!isViewer() ? `<button class="btn btn-danger btn-sm contract-remove-btn" onclick="deleteTenantContract(${u.tenant_id})" title="${t('remove_contract')}">✕</button>` : ''}</span>` : ''}
           ${!isViewer() ? `
             <label class="btn btn-ghost btn-sm" style="cursor:pointer;margin:0">
               📎 ${t('upload_contract')}
@@ -706,13 +740,18 @@ async function uploadTenantContract(tenantId, input) {
   document.body.appendChild(toast);
 
   try {
-    const base64 = await new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = e => resolve(e.target.result.split(',')[1]);
-      reader.onerror = reject;
-      reader.readAsDataURL(file);
+    // Send as multipart/form-data — no base64 encoding, browser sets the boundary automatically
+    const formData = new FormData();
+    formData.append('file', file, file.name);
+
+    const res = await fetch(`/api/contracts/${tenantId}`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${S.token}` },
+      body: formData,
     });
-    await api.post(`/api/contracts/${tenantId}`, { base64, contentType: file.type, filename: file.name });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+
     toast.textContent = '✓ Contract uploaded';
     toast.style.background = '#16a34a';
     setTimeout(() => toast.remove(), 2500);
@@ -741,11 +780,21 @@ async function viewTenantContract(tenantId) {
   }
 }
 
+async function deleteTenantContract(tenantId) {
+  if (!confirm('Remove this contract? This cannot be undone.')) return;
+  try {
+    await api.delete(`/api/contracts/${tenantId}`);
+    await renderTenants();
+  } catch (err) {
+    alert('Could not remove contract: ' + err.message);
+  }
+}
+
 function openTenantEdit(roomId) {
   const u = window._tenantDirData[roomId];
   if (!u) return;
   window._editTenantRoom = roomId;
-  openModal(`✏ ${u.property_code} ${u.room_label}`, `
+  openModal(`✏ ${fmtUnit(u.property_code, u.room_label)}`, `
     <form id="tenant-edit-form" onsubmit="saveTenantEdit(event)">
       <div class="form-grid">
         <div class="form-group full">
@@ -848,6 +897,17 @@ async function renderBilling() {
     } catch { /* ignore */ }
   }));
 
+  // Fetch FY-scoped previous balances for unbilled rooms — prevents future-month payments
+  // from appearing as credits in historical months (chronological carry-forward enforcement).
+  const prevBalMap = {};
+  await Promise.all(tenants.map(async t_ => {
+    if (existingMap[t_.room_id]) return; // billed: use ex.prev_balance from getBilling
+    try {
+      const inv = await api.get(`/api/billing/invoice?room_id=${t_.room_id}&month=${month}`);
+      prevBalMap[t_.room_id] = { outstanding: inv.prev_outstanding || 0, prevMonth: inv.prev_billing_month || null };
+    } catch { /* ignore */ }
+  }));
+
   let lastPropId = null;
   const unitCards = tenants.map(t_ => {
     let groupHeader = '';
@@ -887,15 +947,21 @@ async function renderBilling() {
       return parts.length ? `<div class="billing-balance">${parts.join('')}</div>` : '';
     })();
 
-    // Use clean prev_balance from DB (FY-scoped: previous months billed minus previous months paid)
-    const rawPrevBal = ex.id ? (ex.prev_balance || 0) : (t_.outstanding_balance || 0);
+    // For billed months: use FY-scoped prev_balance from getBilling.
+    // For unbilled months: use FY-scoped prev_outstanding from invoice API — NOT outstanding_balance,
+    // which is an all-time figure that includes future-month payments and would bleed credits backward.
+    const rawPrevBal = ex.id
+      ? (ex.prev_balance || 0)
+      : (prevBalMap[t_.room_id]?.outstanding || 0);
     // Apply $0.5 minimum threshold — tiny rounding differences are treated as settled
     const prevBal   = Math.abs(rawPrevBal) < 0.5 ? 0 : rawPrevBal;
-    const prevMonth = ex.id ? (ex.prev_billing_month || null) : (t_.last_billing_month || null);
+    const prevMonth = ex.id
+      ? (ex.prev_billing_month || null)
+      : (prevBalMap[t_.room_id]?.prevMonth || t_.last_billing_month || null);
     // Compute total_bill from stored components as fallback if stored value is 0
     const computedBill = (ex.rent_amount || 0) + (ex.elec_amount || 0) + (ex.water_amount || 0) - (ex.commission_applied || 0);
     const displayBill  = ex.id ? ((ex.total_bill > 0 ? ex.total_bill : computedBill)) : 0;
-    const totalDue     = ex.id ? (displayBill + prevBal) : (t_.outstanding_balance || 0);
+    const totalDue     = ex.id ? (displayBill + prevBal) : prevBal;
 
     // Store in context for printInvoice and calcBilling
     window._billingCtx.prevBalByRoom[t_.room_id]   = prevBal;
@@ -927,7 +993,7 @@ async function renderBilling() {
     return groupHeader + `
       <div class="billing-unit-card" id="bc-${t_.room_id}">
         <div class="billing-unit-header">
-          <span class="billing-badge">${t_.property_code} ${t_.room_label}</span>
+          <span class="billing-badge">${fmtUnit(t_.property_code, t_.room_label)}</span>
           <span class="billing-tenant-name">${t_.name}</span>
           <span class="billing-rent">${hk(t_.rent)}/mo</span>
           ${t_.commission > 0 ? `<span class="badge badge-amber" title="${t('commission_lbl')}">−${hk(t_.commission)}</span>` : ''}
@@ -985,23 +1051,14 @@ async function renderBilling() {
       </div>`;
   }).join('');
 
-  const isMarch = month.endsWith('-03');
-  const marchWarning = isMarch ? `
-    <div style="background:#fef3c7;border:1.5px solid #fbbf24;border-radius:6px;padding:10px 14px;margin-bottom:16px;font-size:13px;color:#92400e">
-      ⚠ <strong>Fiscal Year End (March):</strong> Outstanding balances from this fiscal year will <strong>not</strong> carry forward to next year (April). Each fiscal year starts fresh. Please resolve any outstanding balances before the end of March.
-    </div>` : '';
-
   $$('view-container').innerHTML = `
     <div class="page-header">
       <h2>${t('billing_title')}</h2>
     </div>
-    ${marchWarning}
     <div class="section">
       <div class="section-header">
         <h3>${t('billing_month')}</h3>
-        <div style="display:flex;gap:10px;align-items:center">
-          <input type="month" value="${month}" min="2026-04" max="${ym()}" onchange="changeBillingMonth(this.value)" />
-        </div>
+        ${mkMonthInput(month, '2026-01', 'changeBillingMonth')}
       </div>
       <div class="section-body">${unitCards || `<div class="empty-state">${t('no_data')}</div>`}</div>
     </div>`;
@@ -1230,7 +1287,7 @@ async function renderPayments() {
   properties.forEach(p => { propByCode[p.code] = p; });
 
   const tenantOptions = tenants.map(t_ =>
-    `<option value="${t_.id}" ${tenantFilter == t_.id ? 'selected' : ''}>${t_.property_code} ${t_.room_label}</option>`
+    `<option value="${t_.id}" ${tenantFilter == t_.id ? 'selected' : ''}>${fmtUnit(t_.property_code, t_.room_label)}</option>`
   ).join('');
 
   const sortedPayments = [...payments].sort((a, b) => {
@@ -1295,8 +1352,8 @@ async function renderPayments() {
     <div class="section mb-16">
       <div class="section-header filter-bar">
         <h3 class="filter-mob-label">${t('filter_month')}</h3>
-        <div style="display:flex;gap:10px;align-items:center;flex-wrap:nowrap">
-          <input type="month" value="${month}" min="2026-04" max="${ym()}" onchange="S.data.payMonth=this.value; renderPayments()" />
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+          ${mkMonthInput(month, '2026-01', 'changePayMonth')}
           <select onchange="S.data.payTenantId=this.value; renderPayments()">
             <option value="">${t('all_tenants')}</option>
             ${tenantOptions}
@@ -1334,7 +1391,7 @@ function showAddPayment() {
     window._proofImage = null;
 
     const tenantOpts = tenants.map(t_ =>
-      `<option value="${t_.id}">${t_.property_code} ${t_.room_label} — ${t_.name}</option>`
+      `<option value="${t_.id}">${fmtUnit(t_.property_code, t_.room_label)} — ${t_.name}</option>`
     ).join('');
 
     openModal(t('add_payment'), `
@@ -1350,7 +1407,7 @@ function showAddPayment() {
           </div>
           <div class="form-group">
             <label>${t('billing_month_lbl')}</label>
-            <input type="month" id="pay-month" value="${ym()}" onchange="updatePaymentDiff()" />
+            <input type="month" lang="en" id="pay-month" value="${ym()}" onchange="updatePaymentDiff()" />
           </div>
           <div class="form-group">
             <label>${t('payment_date')}</label>
@@ -1783,25 +1840,48 @@ async function renderExpenses() {
   ]);
 
   const propById = {};
-  properties.forEach(p => { propById[p.id] = p; });
+  const propSortMap = {};
+  properties.forEach(p => { propById[p.id] = p; propSortMap[p.id] = p.sort_order ?? 99; });
 
   const grandTotal = expenses.reduce((s, e) => s + e.amount, 0);
 
-  // ── Unit dropdown: fixed list ──
-  const FIXED_UNITS = ['2FWS A','2FWS B','2FWS C','3FPK A','3FPK B','3FPK C','4FKS A','4FKS B','4FKS C','4FKS D','4FKS E','5FPS Flat','CarP P99','General'];
-  const unitOptions = FIXED_UNITS.map(u =>
-    `<option value="${u}" ${expUnit === u ? 'selected' : ''}>${u}</option>`
-  ).join('');
+  // ── Unit filter dropdown: grouped by property ──
+  const PROP_TREE = [
+    { label: '2F/WS', children: ['2F/WS-A', '2F/WS-B', '2F/WS-C'] },
+    { label: '3F/KC', children: ['3F/KC-A', '3F/KC-B', '3F/KC-C'] },
+    { label: '4F/KS', children: ['4F/KS-A', '4F/KS-B', '4F/KS-C', '4F/KS-D', '4F/KS-E'] },
+  ];
+  const FLAT_UNITS = ['4F/SH', '5F/SH', 'CarP P99', 'General'];
+  const unitOptions = [
+    ...PROP_TREE.map(g => `<optgroup label="${g.label}">
+      <option value="${g.label}" ${expUnit === g.label ? 'selected' : ''}>${g.label}</option>
+      ${g.children.map(c => `<option value="${c}" ${expUnit === c ? 'selected' : ''}>${c}</option>`).join('')}
+    </optgroup>`),
+    ...FLAT_UNITS.map(u => `<option value="${u}" ${expUnit === u ? 'selected' : ''}>${u}</option>`),
+  ].join('');
 
-  // ── Detail list: apply unit and category filters ──
+  // ── Property-level filter expands to include all child units ──
+  const PROP_CHILDREN = {
+    '2F/WS': new Set(['2F/WS', '2F/WS-A', '2F/WS-B', '2F/WS-C']),
+    '3F/KC': new Set(['3F/KC', '3F/KC-A', '3F/KC-B', '3F/KC-C']),
+    '4F/KS': new Set(['4F/KS', '4F/KS-A', '4F/KS-B', '4F/KS-C', '4F/KS-D', '4F/KS-E']),
+  };
+
   let detailExpenses = expenses;
-  if (expUnit) detailExpenses = detailExpenses.filter(e => expUnitLabel(e) === expUnit);
+  if (expUnit) {
+    const childSet = PROP_CHILDREN[expUnit];
+    if (childSet) {
+      detailExpenses = detailExpenses.filter(e => childSet.has(expUnitLabel(e)));
+    } else {
+      detailExpenses = detailExpenses.filter(e => expUnitLabel(e) === expUnit);
+    }
+  }
   if (expCat)  detailExpenses = detailExpenses.filter(e => e.category === expCat);
 
   const sortedExpenses = [...detailExpenses].sort((a, b) => {
-    const pA = a.property_id ?? Infinity;
-    const pB = b.property_id ?? Infinity;
-    if (pA !== pB) return pA - pB;
+    const oA = a.property_id != null ? (propSortMap[a.property_id] ?? 99) : 100;
+    const oB = b.property_id != null ? (propSortMap[b.property_id] ?? 99) : 100;
+    if (oA !== oB) return oA - oB;
     const kA = a.unit_label || a.property_code || '';
     const kB = b.unit_label || b.property_code || '';
     if (kA !== kB) return kA.localeCompare(kB);
@@ -1855,11 +1935,13 @@ async function renderExpenses() {
   $$('view-container').innerHTML = `
     <div class="page-header">
       <h2>${t('expenses_title')}</h2>
-      <div class="page-controls">
-        <input type="month" value="${expMonth}" min="2026-04" max="${ym()}"
-          onchange="S.data.expMonth=this.value; S.data.expUnit=''; S.data.expCat=''; renderExpenses()"
-          style="padding:8px 12px;border:1.5px solid var(--border);border-radius:6px;font-size:14px" />
-        ${!isViewer() ? `<button class="btn btn-primary" onclick="showAddExpense()">${t('add_expense')}</button>` : ''}
+      ${!isViewer() ? `<div class="page-controls"><button class="btn btn-primary" onclick="showAddExpense()">${t('add_expense')}</button></div>` : ''}
+    </div>
+
+    <div class="section mb-16">
+      <div class="section-header">
+        <h3>${t('filter_month')}</h3>
+        ${mkMonthInput(expMonth, '2026-01', 'changeExpMonth')}
       </div>
     </div>
 
@@ -1885,6 +1967,7 @@ async function renderExpenses() {
         <option value="handling_fee" ${expCat==='handling_fee' ?'selected':''}>${t('cat_handling_fee')}</option>
         <option value="electricity"  ${expCat==='electricity'  ?'selected':''}>${t('cat_electricity')}</option>
         <option value="water"        ${expCat==='water'        ?'selected':''}>${t('cat_water')}</option>
+        <option value="garbage"      ${expCat==='garbage'      ?'selected':''}>${t('cat_garbage')}</option>
         <option value="other"        ${expCat==='other'        ?'selected':''}>${t('cat_other')}</option>
       </select>
     </div>
@@ -1907,11 +1990,33 @@ async function renderExpenses() {
 }
 
 function showAddExpense() {
-  api.get('/api/tenants').then(rooms => {
-    const roomOpts = rooms.map(r => {
-      const unitLabel = `${r.property_code} ${r.room_label}`;
-      return `<option value="${r.property_id}|${unitLabel}">${unitLabel}</option>`;
-    }).join('');
+  Promise.all([
+    api.get('/api/properties'),
+    api.get('/api/tenants'),
+  ]).then(([properties, rooms]) => {
+    // Group active rooms by property_id
+    const roomsByProp = {};
+    rooms.forEach(r => {
+      if (!roomsByProp[r.property_id]) roomsByProp[r.property_id] = [];
+      roomsByProp[r.property_id].push(r);
+    });
+
+    let propOpts = '';
+    properties.forEach(p => {
+      const pRooms = roomsByProp[p.id] || [];
+      if (pRooms.length > 1) {
+        // Multi-room property: optgroup with property-level option first
+        const roomInner = pRooms.map(r => {
+          const ul = fmtUnit(r.property_code, r.room_label);
+          return `<option value="${r.property_id}|${ul}">${ul}</option>`;
+        }).join('');
+        propOpts += `<optgroup label="${p.code}"><option value="${p.id}|${p.code}">${p.code}</option>${roomInner}</optgroup>`;
+      } else if (pRooms.length === 1) {
+        const r = pRooms[0];
+        const ul = fmtUnit(r.property_code, r.room_label);
+        propOpts += `<option value="${r.property_id}|${ul}">${ul}</option>`;
+      }
+    });
 
     openModal(t('add_expense'), `
       <form id="exp-form" onsubmit="submitExpense(event)">
@@ -1921,7 +2026,7 @@ function showAddExpense() {
             <select id="exp-prop" required>
               <option value="">— Select Unit —</option>
               <option value="0|General">General</option>
-              ${roomOpts}
+              ${propOpts}
             </select>
           </div>
           <div class="form-group">
@@ -1939,6 +2044,7 @@ function showAddExpense() {
               <option value="handling_fee">${t('cat_handling_fee')}</option>
               <option value="electricity">${t('cat_electricity')}</option>
               <option value="water">${t('cat_water')}</option>
+              <option value="garbage">${t('cat_garbage')}</option>
               <option value="other">${t('cat_other')}</option>
             </select>
           </div>
@@ -2084,6 +2190,7 @@ async function renderSummary() {
     ['handlingFee', () => t('cat_handling_fee')],
     ['electricity', () => t('cat_electricity')],
     ['water',       () => t('cat_water')],
+    ['garbage',     () => t('cat_garbage')],
     ['other',       () => t('cat_other')],
   ];
   const genTotal  = generalExpenses.total  || 0;
@@ -2254,6 +2361,10 @@ window.handleProofUpload    = handleProofUpload;
 window.markPaymentVerified  = markPaymentVerified;
 window.updateOverpayFields  = updateOverpayFields;
 window.changeGlobalFY       = changeGlobalFY;
+window.openMonthPicker      = openMonthPicker;
+window.changeDashMonth      = changeDashMonth;
+window.changePayMonth       = changePayMonth;
+window.changeExpMonth       = changeExpMonth;
 window.uploadTenantContract = uploadTenantContract;
 window.viewTenantContract   = viewTenantContract;
 window.openTenantEdit       = openTenantEdit;

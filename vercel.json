@@ -1,10 +1,16 @@
 {
   "framework": null,
   "buildCommand": null,
-  "outputDirectory": ".",
+  "outputDirectory": "public",
   "functions": {
     "api/[...path].js": {
-      "maxDuration": 30
+      "maxDuration": 60
     }
-  }
+  },
+  "rewrites": [
+    {
+      "source": "/api/:path*",
+      "destination": "/api/[...path]"
+    }
+  ]
 }

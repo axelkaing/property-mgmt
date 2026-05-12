@@ -1,0 +1,16 @@
+name = "property-mgmt"
+main = "worker/index.js"
+compatibility_date = "2024-09-23"
+
+[assets]
+directory = "./public"
+binding = "ASSETS"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "property-mgmt-db"
+database_id = "666f4f48-11b2-4075-9081-2e167357ee0a"
+
+[vars]
+# Override with: wrangler secret put AUTH_PASSWORD
+AUTH_PASSWORD = "admin123"

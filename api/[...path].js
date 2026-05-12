@@ -1,4 +1,5 @@
 const { put, del, get: getBlobFile } = require('@vercel/blob');
+const { Readable } = require('stream');
 
 const CF_ACCOUNT_ID  = process.env.CF_ACCOUNT_ID;
 const CF_DATABASE_ID = process.env.CF_DATABASE_ID || '666f4f48-11b2-4075-9081-2e167357ee0a';
@@ -92,6 +93,7 @@ async function ensureSchema() {
     `ALTER TABLE tenants ADD COLUMN remark TEXT`,
     `ALTER TABLE tenants ADD COLUMN contract_url TEXT`,
     `ALTER TABLE expenses ADD COLUMN slip_url TEXT`,
+    `ALTER TABLE properties ADD COLUMN sort_order INTEGER DEFAULT 99`,
   ];
   for (const sql of migrations) {
     try { await d1Query(sql); } catch { /* column already exists */ }
@@ -165,6 +167,93 @@ async function ensureSchema() {
       await DB.prepare(`INSERT OR REPLACE INTO _schema_flags (key, value) VALUES ('unit_label_backfill_v1', '1')`).run();
     }
   } catch { /* ignore */ }
+
+  try {
+    const flagR = await DB.prepare(`SELECT value FROM _schema_flags WHERE key='prop_rename_v1'`).first();
+    if (!flagR) {
+      await DB.prepare(`UPDATE properties SET code='2F/WS' WHERE code='2FWS'`).run();
+      await DB.prepare(`UPDATE properties SET code='3F/KC' WHERE code='3FPK'`).run();
+      await DB.prepare(`UPDATE properties SET code='4F/KS' WHERE code='4FKS'`).run();
+      await DB.prepare(`UPDATE properties SET code='5F/SH' WHERE code='5FPS'`).run();
+      // Rename unit_labels in expenses: "XXXX A" → "XX/XX-A"
+      await DB.prepare(`UPDATE expenses SET unit_label='2F/WS'   WHERE unit_label='2FWS'`).run();
+      await DB.prepare(`UPDATE expenses SET unit_label='3F/KC'   WHERE unit_label='3FPK'`).run();
+      await DB.prepare(`UPDATE expenses SET unit_label='4F/KS'   WHERE unit_label='4FKS'`).run();
+      await DB.prepare(`UPDATE expenses SET unit_label='5F/SH'   WHERE unit_label='5FPS' OR unit_label='5FPS Flat'`).run();
+      await DB.prepare(`UPDATE expenses SET unit_label=REPLACE(unit_label,'2FWS ','2F/WS-') WHERE unit_label LIKE '2FWS %'`).run();
+      await DB.prepare(`UPDATE expenses SET unit_label=REPLACE(unit_label,'3FPK ','3F/KC-') WHERE unit_label LIKE '3FPK %'`).run();
+      await DB.prepare(`UPDATE expenses SET unit_label=REPLACE(unit_label,'4FKS ','4F/KS-') WHERE unit_label LIKE '4FKS %'`).run();
+      await DB.prepare(`INSERT OR REPLACE INTO _schema_flags (key,value) VALUES ('prop_rename_v1','1')`).run();
+    }
+  } catch { /* ignore */ }
+
+  try {
+    const flagP = await DB.prepare(`SELECT value FROM _schema_flags WHERE key='prop_4fsh_v1'`).first();
+    if (!flagP) {
+      const existing = await DB.prepare(`SELECT id FROM properties WHERE code='4F/SH'`).first();
+      if (!existing) {
+        await DB.prepare(`INSERT INTO properties (code, address, bank_name, bank_account) VALUES ('4F/SH','4/F, 55 Pilkem St, Shing Hing House','HSBC','062-9-074139')`).run();
+      }
+      const prop = await DB.prepare(`SELECT id FROM properties WHERE code='4F/SH'`).first();
+      if (prop) {
+        const existRoom = await DB.prepare(`SELECT id FROM rooms WHERE property_id=? AND room_label='Flat'`).bind(prop.id).first();
+        if (!existRoom) {
+          await DB.prepare(`INSERT INTO rooms (property_id, room_label, status) VALUES (?, 'Flat', 'occupied')`).bind(prop.id).run();
+        }
+        const room = await DB.prepare(`SELECT id FROM rooms WHERE property_id=? AND room_label='Flat'`).bind(prop.id).first();
+        if (room) {
+          const existTenant = await DB.prepare(`SELECT id FROM tenants WHERE room_id=? AND active=1`).bind(room.id).first();
+          if (!existTenant) {
+            await DB.prepare(`INSERT INTO tenants (room_id, name, rent, elec_rate, water_type, water_rate, contract_start, contract_end, deposit, commission, active, phone) VALUES (?,?,12300,0,'none',0,'2025-11-09','2027-11-08',8000,0,1,'96081495')`)
+              .bind(room.id, 'Mr Khan Noor').run();
+          }
+        }
+      }
+      await DB.prepare(`INSERT OR REPLACE INTO _schema_flags (key,value) VALUES ('prop_4fsh_v1','1')`).run();
+    }
+  } catch { /* ignore */ }
+
+  try {
+    const flagS = await DB.prepare(`SELECT value FROM _schema_flags WHERE key='prop_sort_v1'`).first();
+    if (!flagS) {
+      await DB.prepare(`UPDATE properties SET sort_order=1 WHERE code='2F/WS'`).run();
+      await DB.prepare(`UPDATE properties SET sort_order=2 WHERE code='3F/KC'`).run();
+      await DB.prepare(`UPDATE properties SET sort_order=3 WHERE code='4F/KS'`).run();
+      await DB.prepare(`UPDATE properties SET sort_order=4 WHERE code='4F/SH'`).run();
+      await DB.prepare(`UPDATE properties SET sort_order=5 WHERE code='5F/SH'`).run();
+      await DB.prepare(`UPDATE properties SET sort_order=6 WHERE code='CarP'`).run();
+      await DB.prepare(`INSERT OR REPLACE INTO _schema_flags (key,value) VALUES ('prop_sort_v1','1')`).run();
+    }
+  } catch { /* ignore */ }
+
+  try {
+    const flagO = await DB.prepare(`SELECT value FROM _schema_flags WHERE key='orphan_cleanup_v1'`).first();
+    if (!flagO) {
+      // Null out billing_month on payments where the referenced month has no meter_readings
+      // for that tenant — these cause phantom credits in prev_outstanding calculations.
+      // Only touches months at least 1 month in the past to avoid touching advance payments.
+      await DB.prepare(`
+        UPDATE payments
+        SET billing_month = NULL
+        WHERE billing_month IS NOT NULL
+          AND billing_month < strftime('%Y-%m', 'now', '-1 month')
+          AND NOT EXISTS (
+            SELECT 1 FROM meter_readings mr
+            WHERE mr.billing_month = payments.billing_month
+              AND mr.room_id = (SELECT room_id FROM tenants WHERE id = payments.tenant_id)
+          )
+      `).run();
+      // Recompute outstanding_balance for all tenants from scratch
+      await DB.prepare(`UPDATE tenants SET outstanding_balance = 0`).run();
+      await DB.prepare(`
+        UPDATE tenants SET outstanding_balance = (
+          COALESCE((SELECT SUM(mr.total_bill) FROM meter_readings mr WHERE mr.room_id = tenants.room_id), 0)
+          - COALESCE((SELECT SUM(p.amount) FROM payments p WHERE p.tenant_id = tenants.id), 0)
+        )
+      `).run();
+      await DB.prepare(`INSERT OR REPLACE INTO _schema_flags (key,value) VALUES ('orphan_cleanup_v1','1')`).run();
+    }
+  } catch { /* ignore */ }
 }
 
 // ── Router ────────────────────────────────────────────────────────────────────
@@ -198,8 +287,9 @@ async function route(req, res, path, url) {
   // Write routes (admin only):
   if (!isAdmin) return sendErr(res, 'Forbidden', 403);
 
-  if (/^\/api\/tenants\/\d+$/.test(path)     && m === 'PUT')    return updateTenant(req, res, seg(path, 3));
-  if (/^\/api\/contracts\/\d+$/.test(path)   && m === 'POST')   return uploadContract(req, res, seg(path, 3));
+  if (/^\/api\/tenants\/\d+$/.test(path)   && m === 'PUT')    return updateTenant(req, res, seg(path, 3));
+  if (/^\/api\/contracts\/\d+$/.test(path) && m === 'POST')   return uploadContract(req, res, seg(path, 3));
+  if (/^\/api\/contracts\/\d+$/.test(path) && m === 'DELETE') return deleteContract(res, seg(path, 3));
   if (/^\/api\/expenses\/\d+\/slip$/.test(path) && m === 'POST') return uploadExpenseSlip(req, res, seg(path, 3));
   if (path === '/api/billing'                 && m === 'POST')   return createBilling(req, res);
   if (/^\/api\/billing\/\d+$/.test(path)     && m === 'DELETE') return deleteBilling(res, seg(path, 3));
@@ -237,7 +327,7 @@ async function dashboard(res, url) {
         SUM(CASE WHEN r.status='occupied' THEN 1 ELSE 0 END) as occupied,
         SUM(CASE WHEN r.status='vacant'   THEN 1 ELSE 0 END) as vacant
       FROM properties p LEFT JOIN rooms r ON r.property_id = p.id
-      GROUP BY p.id ORDER BY p.id`).all(),
+      GROUP BY p.id ORDER BY p.sort_order, p.id`).all(),
 
     DB.prepare(`
       SELECT r.id, r.property_id, r.room_label, r.status,
@@ -260,7 +350,8 @@ async function dashboard(res, url) {
       FROM rooms r
       LEFT JOIN tenants t ON t.room_id = r.id AND t.active = 1
       LEFT JOIN meter_readings mr ON mr.room_id = r.id AND mr.billing_month = ?
-      ORDER BY r.property_id, r.room_label`).bind(currentMonth, currentMonth, fyStart, currentMonth, fyStart, currentMonth).all(),
+      LEFT JOIN properties prop ON prop.id = r.property_id
+      ORDER BY prop.sort_order, prop.id, r.room_label`).bind(currentMonth, currentMonth, fyStart, currentMonth, fyStart, currentMonth).all(),
 
     DB.prepare(`
       SELECT t.id, t.name, t.contract_end, t.contract_start,
@@ -300,7 +391,7 @@ async function dashboard(res, url) {
 // ── Properties ────────────────────────────────────────────────────────────────
 
 async function getProperties(res) {
-  const rows = await DB.prepare(`SELECT * FROM properties ORDER BY id`).all();
+  const rows = await DB.prepare(`SELECT * FROM properties ORDER BY sort_order, id`).all();
   return sendJson(res, rows.results);
 }
 
@@ -312,7 +403,7 @@ async function getTenants(res, url) {
     ? DB.prepare(`SELECT t.*, r.room_label, p.code as property_code FROM tenants t JOIN rooms r ON r.id=t.room_id JOIN properties p ON p.id=r.property_id WHERE t.room_id=? ORDER BY t.id`).bind(roomId)
     : DB.prepare(`SELECT t.*, r.room_label, r.property_id, p.code as property_code,
         (SELECT MAX(mr.billing_month) FROM meter_readings mr WHERE mr.room_id = t.room_id) as last_billing_month
-      FROM tenants t JOIN rooms r ON r.id=t.room_id JOIN properties p ON p.id=r.property_id WHERE t.active=1 ORDER BY r.property_id, r.room_label`);
+      FROM tenants t JOIN rooms r ON r.id=t.room_id JOIN properties p ON p.id=r.property_id WHERE t.active=1 ORDER BY p.sort_order, p.id, r.room_label`);
   const rows = await query.all();
   return sendJson(res, rows.results);
 }
@@ -340,19 +431,50 @@ async function getTenantsDirectory(res) {
     FROM rooms r
     JOIN properties p ON p.id = r.property_id
     LEFT JOIN tenants t ON t.room_id = r.id AND t.active = 1
-    ORDER BY p.id, r.room_label`).all();
+    ORDER BY p.sort_order, p.id, r.room_label`).all();
   return sendJson(res, rows.results);
 }
 
 async function uploadContract(req, res, tenantId) {
-  const { base64, contentType, filename } = req.body || {};
-  if (!base64 || !contentType) return sendErr(res, 'base64 and contentType required');
+  const Busboy = require('@fastify/busboy');
+
+  // Parse multipart/form-data — collect the uploaded file
+  const { buffer, fileType } = await new Promise((resolve, reject) => {
+    const bb = new Busboy({ headers: req.headers });
+    const chunks = [];
+    let fileType = null;
+    let gotFile = false;
+
+    bb.on('file', (_field, stream, _filename, _encoding, mimetype) => {
+      gotFile = true;
+      fileType = mimetype;
+      stream.on('data', d => chunks.push(d));
+      stream.on('error', reject);
+    });
+
+    bb.on('finish', () => {
+      if (!gotFile) return reject(new Error('No file in request'));
+      resolve({ buffer: Buffer.concat(chunks), fileType });
+    });
+
+    bb.on('error', reject);
+
+    // Vercel may pre-buffer the body as req.body (Buffer) or leave req as a readable stream
+    if (Buffer.isBuffer(req.body)) {
+      const r = new Readable();
+      r.push(req.body);
+      r.push(null);
+      r.pipe(bb);
+    } else {
+      req.pipe(bb);
+    }
+  });
 
   const allowed = ['application/pdf', 'image/jpeg', 'image/png'];
-  if (!allowed.includes(contentType)) return sendErr(res, 'Only PDF, JPG, PNG files are allowed');
+  if (!allowed.includes(fileType)) return sendErr(res, 'Only PDF, JPG, PNG files are allowed');
 
-  const ext = contentType === 'application/pdf' ? '.pdf'
-            : contentType === 'image/png' ? '.png' : '.jpg';
+  const ext = fileType === 'application/pdf' ? '.pdf'
+            : fileType === 'image/png' ? '.png' : '.jpg';
   const pathname = `contracts/tenant-${tenantId}${ext}`;
 
   const existing = await DB.prepare(`SELECT contract_url FROM tenants WHERE id=?`).bind(tenantId).first();
@@ -360,10 +482,9 @@ async function uploadContract(req, res, tenantId) {
     try { await del(existing.contract_url); } catch { /* already gone */ }
   }
 
-  const buffer = Buffer.from(base64, 'base64');
   const blob = await put(pathname, buffer, {
     access: 'private',
-    contentType,
+    contentType: fileType,
     addRandomSuffix: true,
   });
 
@@ -388,6 +509,16 @@ async function viewContract(req, res, tenantId) {
   res.setHeader('Content-Type', contentType);
   res.setHeader('Content-Disposition', 'inline');
   return res.status(200).send(Buffer.from(buffer));
+}
+
+async function deleteContract(res, tenantId) {
+  const tenant = await DB.prepare(`SELECT contract_url FROM tenants WHERE id=?`).bind(tenantId).first();
+  if (!tenant) return sendErr(res, 'Tenant not found', 404);
+  if (tenant.contract_url) {
+    try { await del(tenant.contract_url); } catch { /* already gone */ }
+  }
+  await DB.prepare(`UPDATE tenants SET contract_url=NULL WHERE id=?`).bind(tenantId).run();
+  return sendJson(res, { success: true });
 }
 
 // ── Billing ───────────────────────────────────────────────────────────────────
@@ -415,6 +546,7 @@ async function getBilling(res, url) {
         ), 0) - COALESCE((
           SELECT SUM(pay2.amount) FROM payments pay2
           WHERE pay2.tenant_id = t.id
+            AND (pay2.billing_month IS NULL OR pay2.billing_month <= mr.billing_month)
         ), 0)
       ELSE 0 END as running_balance,
       CASE WHEN t.id IS NOT NULL THEN
@@ -438,7 +570,7 @@ async function getBilling(res, url) {
     JOIN properties p ON p.id = r.property_id
     LEFT JOIN tenants t ON t.room_id = mr.room_id AND t.active = 1
     ${where}
-    ORDER BY mr.billing_month DESC, r.property_id, r.room_label`).all();
+    ORDER BY mr.billing_month DESC, p.sort_order, p.id, r.room_label`).all();
   return sendJson(res, rows.results);
 }
 
@@ -543,10 +675,12 @@ async function getBillingInvoice(res, url) {
   const fyYear  = mo >= 4 ? y : y - 1;
   const fyStart = `${fyYear}-04`;
 
+  if (month < fyStart) return sendJson(res, { total_bill: null, outstanding_balance: 0, prev_billing_month: null, prev_outstanding: 0, fy_start: fyStart });
+
   const [mr, tenant, prevMr, prevBalRow] = await Promise.all([
     DB.prepare(`SELECT total_bill FROM meter_readings WHERE room_id=? AND billing_month=?`).bind(roomId, month).first(),
     DB.prepare(`SELECT outstanding_balance FROM tenants WHERE room_id=? AND active=1`).bind(roomId).first(),
-    DB.prepare(`SELECT billing_month FROM meter_readings WHERE room_id=? AND billing_month<? ORDER BY billing_month DESC LIMIT 1`).bind(roomId, month).first(),
+    DB.prepare(`SELECT billing_month FROM meter_readings WHERE room_id=? AND billing_month<? AND billing_month>=? ORDER BY billing_month DESC LIMIT 1`).bind(roomId, month, fyStart).first(),
     DB.prepare(`
       SELECT
         COALESCE((SELECT SUM(mr2.total_bill) FROM meter_readings mr2
@@ -817,7 +951,7 @@ async function getSummary(res, url) {
       LEFT JOIN tenants t ON t.room_id = r.id
       LEFT JOIN payments pay ON pay.tenant_id = t.id
         AND pay.billing_month >= ? AND pay.billing_month <= ?
-      GROUP BY pr.id ORDER BY pr.id`).bind(mStart, mEnd).all(),
+      GROUP BY pr.id ORDER BY pr.sort_order, pr.id`).bind(mStart, mEnd).all(),
 
     DB.prepare(`
       SELECT category, COALESCE(SUM(amount), 0) as total
@@ -846,6 +980,7 @@ async function getSummary(res, url) {
   const handlingFee   = catMap['handling_fee'] || 0;
   const electricity   = catMap['electricity']  || 0;
   const water         = catMap['water']        || 0;
+  const garbage       = catMap['garbage']      || 0;
   const other         = catMap['other']        || 0;
   const totalExpenses = Object.values(catMap).reduce((s, v) => s + v, 0);
   const netIncome     = totalIncome - totalExpenses;
@@ -869,6 +1004,7 @@ async function getSummary(res, url) {
     handlingFee: genExp['handling_fee'] || 0,
     electricity: genExp['electricity']  || 0,
     water:       genExp['water']        || 0,
+    garbage:     genExp['garbage']      || 0,
     other:       genExp['other']        || 0,
     total:       Object.values(genExp).reduce((s, v) => s + v, 0),
   };
@@ -890,6 +1026,7 @@ async function getSummary(res, url) {
     handlingFee: propExpByCategory['handling_fee'] || 0,
     electricity: propExpByCategory['electricity']  || 0,
     water:       propExpByCategory['water']        || 0,
+    garbage:     propExpByCategory['garbage']      || 0,
     other:       propExpByCategory['other']        || 0,
     total:       Object.values(propExpByCategory).reduce((s, v) => s + v, 0),
   };
@@ -904,6 +1041,7 @@ async function getSummary(res, url) {
     const pHandling  = exp['handling_fee'] || 0;
     const pElec      = exp['electricity']  || 0;
     const pWater     = exp['water']        || 0;
+    const pGarbage   = exp['garbage']      || 0;
     const pOther     = exp['other']        || 0;
     const pTotalExp  = Object.values(exp).reduce((s, v) => s + v, 0);
     const pTaxBase   = Math.max(0, p.total_income - pGovtRent);
@@ -912,7 +1050,7 @@ async function getSummary(res, url) {
       income: p.total_income,
       expenses: { govtRent: pGovtRent, govtRates: pGovtRates, repairs: pRepairs,
                   insurance: pInsurance, stampDuty: pStamp, handlingFee: pHandling,
-                  electricity: pElec, water: pWater, other: pOther },
+                  electricity: pElec, water: pWater, garbage: pGarbage, other: pOther },
       totalExpenses: pTotalExp,
       netIncome: p.total_income - pTotalExp,
       taxBase: pTaxBase,
@@ -926,7 +1064,7 @@ async function getSummary(res, url) {
     expenses: { byCategory: catMap, total: totalExpenses },
     summary: {
       totalIncome, govtRent, govtRates, repairs, insurance, stampDuty, handlingFee,
-      electricity, water, other,
+      electricity, water, garbage, other,
       totalExpenses, netIncome, perOwner: netIncome / 5,
       taxBase, propertyTax,
     },

@@ -1,0 +1,17 @@
+{
+  "name": "property-mgmt",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "bash deploy.sh",
+    "db:migrate": "wrangler d1 migrations apply property-mgmt-db --remote",
+    "db:migrate:local": "wrangler d1 migrations apply property-mgmt-db --local"
+  },
+  "dependencies": {
+    "@vercel/blob": "^2.3.3"
+  },
+  "devDependencies": {
+    "wrangler": "^3.50.0"
+  }
+}
