@@ -323,6 +323,7 @@ async function route(req, res, path, url) {
   if (/^\/api\/payments\/\d+$/.test(path)    && m === 'DELETE') return deletePayment(res, seg(path, 3));
   if (path === '/api/expenses'                && m === 'POST')   return createExpense(req, res);
   if (/^\/api\/expenses\/\d+$/.test(path)    && m === 'DELETE') return deleteExpense(res, seg(path, 3));
+  if (path === '/api/admin/recalc-balances'   && m === 'GET')    return recalcBalances(res);
 
   return sendErr(res, 'Not found', 404);
 }
@@ -695,6 +696,20 @@ async function deleteBilling(res, id) {
       ) WHERE id=?`).bind(bill.tenant_id).run();
   }
   return sendJson(res, { success: true });
+}
+
+async function recalcBalances(res) {
+  await DB.prepare(`
+    UPDATE tenants SET outstanding_balance = (
+      COALESCE((SELECT SUM(mr.total_bill) FROM meter_readings mr WHERE mr.room_id = tenants.room_id), 0)
+      - COALESCE((SELECT SUM(p.amount) FROM payments p WHERE p.tenant_id = tenants.id), 0)
+    )`).run();
+  const rows = await DB.prepare(`
+    SELECT t.id, t.name, t.outstanding_balance, r.room_label
+    FROM tenants t JOIN rooms r ON r.id = t.room_id
+    WHERE t.active = 1
+    ORDER BY r.room_label`).all();
+  return sendJson(res, { success: true, recalculated: rows.results.length, tenants: rows.results });
 }
 
 async function getBillingInvoice(res, url) {
