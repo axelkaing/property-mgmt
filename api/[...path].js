@@ -694,11 +694,14 @@ async function getBillingInvoice(res, url) {
     `).bind(roomId, month, fyStart, roomId, month, fyStart).first(),
   ]);
 
+  const prevBillingMonth = prevMr?.billing_month ?? null;
+  const prevOutstanding  = prevBillingMonth ? (prevBalRow?.prev_outstanding ?? 0) : 0;
+
   return sendJson(res, {
     total_bill:          mr?.total_bill ?? null,
     outstanding_balance: tenant?.outstanding_balance ?? 0,
-    prev_billing_month:  prevMr?.billing_month ?? null,
-    prev_outstanding:    prevBalRow?.prev_outstanding ?? 0,
+    prev_billing_month:  prevBillingMonth,
+    prev_outstanding:    prevOutstanding,
     fy_start:            fyStart,
   });
 }
