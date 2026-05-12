@@ -163,6 +163,18 @@ async function ensureSchema() {
   } catch { /* ignore */ }
 
   try {
+    const flagBrv6 = await DB.prepare(`SELECT value FROM _schema_flags WHERE key='balance_reset_v6'`).first();
+    if (!flagBrv6) {
+      await DB.prepare(`
+        UPDATE tenants SET outstanding_balance = (
+          COALESCE((SELECT SUM(mr.total_bill) FROM meter_readings mr WHERE mr.room_id = tenants.room_id), 0)
+          - COALESCE((SELECT SUM(p.amount) FROM payments p WHERE p.tenant_id = tenants.id), 0)
+        )`).run();
+      await DB.prepare(`INSERT OR REPLACE INTO _schema_flags (key, value) VALUES ('balance_reset_v6', '1')`).run();
+    }
+  } catch { /* ignore */ }
+
+  try {
     const flag5 = await DB.prepare(`SELECT value FROM _schema_flags WHERE key='unit_label_backfill_v1'`).first();
     if (!flag5) {
       await DB.prepare(`
@@ -648,8 +660,11 @@ async function createBilling(req, res) {
           commission_applied, total_bill, notes || null)
     .run();
 
-  const billDiff = total_bill - oldBill;
-  await DB.prepare(`UPDATE tenants SET outstanding_balance = outstanding_balance + ? WHERE id=?`).bind(billDiff, tenant.id).run();
+  await DB.prepare(`
+    UPDATE tenants SET outstanding_balance = (
+      COALESCE((SELECT SUM(mr.total_bill) FROM meter_readings mr WHERE mr.room_id = tenants.room_id), 0)
+      - COALESCE((SELECT SUM(p.amount) FROM payments p WHERE p.tenant_id = tenants.id), 0)
+    ) WHERE id=?`).bind(tenant.id).run();
 
   const updated = await DB.prepare(`SELECT outstanding_balance FROM tenants WHERE id=?`).bind(tenant.id).first();
 
@@ -673,8 +688,11 @@ async function deleteBilling(res, id) {
   await DB.prepare(`DELETE FROM meter_readings WHERE id=?`).bind(id).run();
 
   if (bill?.tenant_id) {
-    await DB.prepare(`UPDATE tenants SET outstanding_balance = outstanding_balance - ? WHERE id=?`)
-      .bind(bill.total_bill || 0, bill.tenant_id).run();
+    await DB.prepare(`
+      UPDATE tenants SET outstanding_balance = (
+        COALESCE((SELECT SUM(mr.total_bill) FROM meter_readings mr WHERE mr.room_id = tenants.room_id), 0)
+        - COALESCE((SELECT SUM(p.amount) FROM payments p WHERE p.tenant_id = tenants.id), 0)
+      ) WHERE id=?`).bind(bill.tenant_id).run();
   }
   return sendJson(res, { success: true });
 }
