@@ -429,7 +429,9 @@ async function getTenants(res, url) {
     ? DB.prepare(`SELECT t.*, r.room_label, p.code as property_code FROM tenants t JOIN rooms r ON r.id=t.room_id JOIN properties p ON p.id=r.property_id WHERE t.room_id=? ORDER BY t.id`).bind(roomId)
     : DB.prepare(`SELECT t.*, r.room_label, r.property_id, p.code as property_code,
         (SELECT MAX(mr.billing_month) FROM meter_readings mr WHERE mr.room_id = t.room_id) as last_billing_month
-      FROM tenants t JOIN rooms r ON r.id=t.room_id JOIN properties p ON p.id=r.property_id WHERE t.active=1 ORDER BY p.sort_order, p.id, r.room_label`);
+      FROM tenants t JOIN rooms r ON r.id=t.room_id JOIN properties p ON p.id=r.property_id
+      WHERE t.active=1 OR (t.active=0 AND t.contract_end >= '2026-01-01')
+      ORDER BY p.sort_order, p.id, r.room_label`);
   const rows = await query.all();
   return sendJson(res, rows.results);
 }
