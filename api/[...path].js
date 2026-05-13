@@ -279,6 +279,21 @@ async function ensureSchema() {
       await DB.prepare(`INSERT OR REPLACE INTO _schema_flags (key,value) VALUES ('orphan_cleanup_v1','1')`).run();
     }
   } catch { /* ignore */ }
+
+  try {
+    const flagT = await DB.prepare(`SELECT value FROM _schema_flags WHERE key='tenant_4fks_c_v1'`).first();
+    if (!flagT) {
+      const existing = await DB.prepare(`SELECT id FROM tenants WHERE room_id=9`).first();
+      if (!existing) {
+        await DB.prepare(`
+          INSERT INTO tenants (room_id, name, rent, elec_rate, water_type, water_rate,
+            contract_start, contract_end, deposit, commission, active, phone, outstanding_balance)
+          VALUES (9, 'Ms Chen Yun Fang', 3250, 1.6, 'fixed', 110, NULL, '2026-03-31', 0, 0, 0, NULL, 0)
+        `).run();
+      }
+      await DB.prepare(`INSERT OR REPLACE INTO _schema_flags (key,value) VALUES ('tenant_4fks_c_v1','1')`).run();
+    }
+  } catch { /* ignore */ }
 }
 
 // ── Router ────────────────────────────────────────────────────────────────────
