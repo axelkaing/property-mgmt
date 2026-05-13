@@ -1562,7 +1562,7 @@ async function updatePaymentDiff() {
   // Show invoice + prior-period balance (NOT current invoice double-counted as outstanding)
   if (invoiceAmt != null) {
     html += `<span class="text-muted" style="font-size:12px">Invoice: <strong>${hk(invoiceAmt)}</strong></span>`;
-    if (Math.abs(prevOutstanding) >= 0.5) {
+    if (prevBillingMo !== null && Math.abs(prevOutstanding) >= 0.5) {
       html += prevOutstanding > 0
         ? `&ensp;<span class="text-danger">+ ${t('outstanding_lbl')}: <strong>+${hk(prevOutstanding)}</strong></span>`
         : `&ensp;<span class="text-success">+ ${t('balance_credit')}: <strong>−${hk(-prevOutstanding)}</strong></span>`;

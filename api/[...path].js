@@ -729,9 +729,10 @@ async function getBillingInvoice(res, url) {
 
   if (month < fyStart) return sendJson(res, { total_bill: null, outstanding_balance: 0, prev_billing_month: null, prev_outstanding: 0, fy_start: fyStart });
 
-  const [mr, tenant, prevMr, prevBalRow] = await Promise.all([
+  const [mr, tenant, firstBillingRow, prevMr, prevBalRow] = await Promise.all([
     DB.prepare(`SELECT total_bill FROM meter_readings WHERE room_id=? AND billing_month=?`).bind(roomId, month).first(),
     DB.prepare(`SELECT outstanding_balance FROM tenants WHERE room_id=? AND active=1`).bind(roomId).first(),
+    DB.prepare(`SELECT MIN(billing_month) as first_month FROM meter_readings WHERE room_id=?`).bind(roomId).first(),
     DB.prepare(`SELECT billing_month FROM meter_readings WHERE room_id=? AND billing_month<? AND billing_month>=? ORDER BY billing_month DESC LIMIT 1`).bind(roomId, month, fyStart).first(),
     DB.prepare(`
       SELECT
@@ -746,8 +747,10 @@ async function getBillingInvoice(res, url) {
     `).bind(roomId, month, fyStart, roomId, month, fyStart).first(),
   ]);
 
-  const prevBillingMonth = prevMr?.billing_month ?? null;
-  const prevOutstanding  = prevBillingMonth ? (prevBalRow?.prev_outstanding ?? 0) : 0;
+  const firstBillingMonth = firstBillingRow?.first_month ?? null;
+  const isFirstOrBefore   = firstBillingMonth === null || month <= firstBillingMonth;
+  const prevBillingMonth  = (!isFirstOrBefore && prevMr?.billing_month) ? prevMr.billing_month : null;
+  const prevOutstanding   = prevBillingMonth ? (prevBalRow?.prev_outstanding ?? 0) : 0;
 
   return sendJson(res, {
     total_bill:          mr?.total_bill ?? null,
