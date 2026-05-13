@@ -294,6 +294,14 @@ async function ensureSchema() {
       await DB.prepare(`INSERT OR REPLACE INTO _schema_flags (key,value) VALUES ('tenant_4fks_c_v1','1')`).run();
     }
   } catch { /* ignore */ }
+
+  try {
+    const flagB = await DB.prepare(`SELECT value FROM _schema_flags WHERE key='chen_balance_zero_v1'`).first();
+    if (!flagB) {
+      await DB.prepare(`UPDATE tenants SET outstanding_balance = 0 WHERE name = 'Ms Chen Yun Fang'`).run();
+      await DB.prepare(`INSERT OR REPLACE INTO _schema_flags (key,value) VALUES ('chen_balance_zero_v1','1')`).run();
+    }
+  } catch { /* ignore */ }
 }
 
 // ── Router ────────────────────────────────────────────────────────────────────
