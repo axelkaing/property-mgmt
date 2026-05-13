@@ -1546,6 +1546,13 @@ async function updatePaymentDiff() {
       if (inv.total_bill != null) invoiceAmt = inv.total_bill;
       prevBillingMo   = inv.prev_billing_month || null;
       prevOutstanding = inv.prev_outstanding   || 0;
+      if (billingMonth <= inv.prev_billing_month ||
+          (inv.total_bill == null && billingMonth < (tenant.last_billing_month || ''))) {
+        invoiceAmt = null;
+        prevOutstanding = 0;
+        wrap.style.display = 'none';
+        return;
+      }
     } catch { /* no invoice for this month */ }
   }
 
