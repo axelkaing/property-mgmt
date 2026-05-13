@@ -1407,11 +1407,11 @@ function showAddPayment() {
           </div>
           <div class="form-group">
             <label>${t('billing_month_lbl')}</label>
-            <input type="month" lang="en" id="pay-month" value="${ym()}" onchange="updatePaymentDiff()" />
+            <input type="month" lang="en" id="pay-month" value="${S.data.payMonth || ym()}" onchange="updatePaymentDiff()" />
           </div>
           <div class="form-group">
             <label>${t('payment_date')}</label>
-            <input type="date" id="pay-date" value="${today()}" required />
+            <input type="date" id="pay-date" value="${S.data.payMonth ? S.data.payMonth + '-01' : today()}" required />
           </div>
           <div class="form-group">
             <label>${t('amount_lbl')}</label>
@@ -1536,9 +1536,15 @@ async function updatePaymentDiff() {
   const tenant = ctx?.tenantMap[tenantId];
   if (!tenant) { wrap.style.display = 'none'; return; }
 
-  // Try to fetch invoice amount for selected billing month
-  let invoiceAmt    = null;
-  let prevBillingMo = null;
+  // Hide entirely for months before the tenant's last billing record
+  if (billingMonth && billingMonth < (tenant.last_billing_month || '')) {
+    wrap.style.display = 'none';
+    return;
+  }
+
+  // Fetch invoice for the selected billing month
+  let invoiceAmt      = null;
+  let prevBillingMo   = null;
   let prevOutstanding = 0;
   if (billingMonth && tenant.room_id) {
     try {
@@ -1546,13 +1552,6 @@ async function updatePaymentDiff() {
       if (inv.total_bill != null) invoiceAmt = inv.total_bill;
       prevBillingMo   = inv.prev_billing_month || null;
       prevOutstanding = inv.prev_outstanding   || 0;
-      if (billingMonth <= inv.prev_billing_month ||
-          (inv.total_bill == null && billingMonth < (tenant.last_billing_month || ''))) {
-        invoiceAmt = null;
-        prevOutstanding = 0;
-        wrap.style.display = 'none';
-        return;
-      }
     } catch { /* no invoice for this month */ }
   }
 
@@ -1566,9 +1565,10 @@ async function updatePaymentDiff() {
 
   let html = '';
 
-  // Show invoice + prior-period balance (NOT current invoice double-counted as outstanding)
+  // Show invoice + prior-period carry-forward
   if (invoiceAmt != null) {
     html += `<span class="text-muted" style="font-size:12px">Invoice: <strong>${hk(invoiceAmt)}</strong></span>`;
+    // Only show carry-forward when there is a real previous billing record (prev_billing_month non-null)
     if (prevBillingMo !== null && Math.abs(prevOutstanding) >= 0.5) {
       html += prevOutstanding > 0
         ? `&ensp;<span class="text-danger">+ ${t('outstanding_lbl')}: <strong>+${hk(prevOutstanding)}</strong></span>`
@@ -1592,7 +1592,6 @@ async function updatePaymentDiff() {
       window._payOverpayOption = 'exact';
     } else if (diff > 0.01) {
       window._payOverpayOption = window._payOverpayOption === 'adjust' ? 'adjust' : 'carry';
-      // Preserve whatever month the user already picked before this re-render
       const preservedAdjMonth = $$('overpay-adj-month')?.value || prevBillingMo || '';
       html += `
         <div class="overpay-wrap">
