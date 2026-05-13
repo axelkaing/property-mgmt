@@ -1561,9 +1561,7 @@ async function updatePaymentDiff() {
   if (Math.abs(prevOutstanding) < 0.5) prevOutstanding = 0;
 
   // expectedAmt = this month's invoice + any genuine prev-month outstanding (FY-scoped)
-  const expectedAmt = invoiceAmt != null
-    ? invoiceAmt + prevOutstanding
-    : (tenant.outstanding_balance || 0);
+  const expectedAmt = invoiceAmt != null ? invoiceAmt + prevOutstanding : 0;
 
   let html = '';
 
@@ -1577,11 +1575,6 @@ async function updatePaymentDiff() {
         : `&ensp;<span class="text-success">+ ${t('balance_credit')}: <strong>−${hk(-prevOutstanding)}</strong></span>`;
     }
     html += '<br>';
-  } else if (Math.abs(tenant.outstanding_balance || 0) >= 0.5) {
-    const outstanding = tenant.outstanding_balance || 0;
-    html += outstanding > 0
-      ? `<span class="text-danger">⚠ ${t('outstanding_lbl')}: <strong>+${hk(outstanding)}</strong></span><br>`
-      : `<span class="text-success">▲ ${t('balance_credit')}: <strong>−${hk(-outstanding)}</strong></span><br>`;
   }
 
   // Detect over/underpayment only when amount is entered
