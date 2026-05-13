@@ -1390,9 +1390,11 @@ function showAddPayment() {
     tenants.forEach(t_ => { window._payFormCtx.tenantMap[t_.id] = t_; });
     window._proofImage = null;
 
-    const tenantOpts = tenants.map(t_ =>
-      `<option value="${t_.id}">${fmtUnit(t_.property_code, t_.room_label)} — ${t_.name}</option>`
-    ).join('');
+    const payMonth = S.data.payMonth || ym();
+    const tenantOpts = tenants
+      .filter(t_ => t_.active === 1 || (t_.contract_end && t_.contract_end >= payMonth))
+      .map(t_ => `<option value="${t_.id}">${fmtUnit(t_.property_code, t_.room_label)} — ${t_.name}</option>`)
+      .join('');
 
     openModal(t('add_payment'), `
       <form id="pay-form" onsubmit="submitPayment(event)">
