@@ -615,6 +615,8 @@ tr.prop-group-spacer:hover td { background: var(--bg) !important; }
   .sidebar.open { transform: translateX(0); }
   .main-content { margin-left: 0; padding: 16px; padding-top: 60px; }
   .stats-grid { grid-template-columns: 1fr 1fr; }
+  .stat-card { padding: 14px; }
+  .stat-value { font-size: 22px; }
   .summary-stat-row1, .summary-stat-row2 { grid-template-columns: 1fr; }
   .tenant-grid { grid-template-columns: 1fr; }
   .summary-grid { grid-template-columns: 1fr; }
