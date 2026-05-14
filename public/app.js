@@ -421,13 +421,12 @@ function fmtMonth(m) { if (!m) return '–'; const [y, mo] = m.split('-'); retur
 function openMonthPicker(wrap) {
   const inp = wrap.querySelector('input[type=month]');
   if (!inp) return;
-  try { inp.showPicker(); } catch(e) {
-    try { inp.click(); } catch(e2) { inp.focus(); }
-  }
+  inp.focus();
+  inp.click();
 }
 
 function mkMonthInput(currentMonth, minMo, onChangeFn) {
-  return `<div class="month-input-wrap" onclick="openMonthPicker(this)" ontouchend="event.preventDefault();openMonthPicker(this)">
+  return `<div class="month-input-wrap">
     <span class="month-input-icon">📅</span>
     <span class="month-input-label">${fmtMonth(currentMonth)}</span>
     <input type="month" value="${currentMonth}" min="${minMo || '2026-01'}" max="${ym()}"
