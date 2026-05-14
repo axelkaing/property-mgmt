@@ -1342,6 +1342,22 @@ async function renderPayments() {
         </tr>`);
     });
   }
+  if (sortedPayments.length > 0) {
+    const totalAmt = sortedPayments.reduce((s, p) => s + (p.amount || 0), 0);
+    const ts = 'font-weight:bold;border-top:2px solid #d1d5db';
+    payRowsArr.push(`<tr>
+      <td class="col-mob-hide" style="${ts}"></td>
+      <td class="col-mob-hide" style="${ts}"></td>
+      <td class="col-pay-tenant" style="${ts}">Total</td>
+      <td class="col-mob-hide" style="${ts}"></td>
+      <td class="col-mob-hide" style="${ts}"></td>
+      <td class="td-money col-pay-amt" style="${ts}">${hk(totalAmt)}</td>
+      <td class="col-mob-hide" style="${ts}"></td>
+      <td class="col-mob-hide" style="${ts}"></td>
+      <td class="col-pay-ver" style="${ts}"></td>
+      <td class="col-mob-hide" style="${ts}"></td>
+    </tr>`);
+  }
   const rows = payRowsArr.join('');
 
   $$('view-container').innerHTML = `
