@@ -379,7 +379,8 @@ async function dashboard(res, url) {
       GROUP BY p.id ORDER BY p.sort_order, p.id`).all(),
 
     DB.prepare(`
-      SELECT r.id, r.property_id, r.room_label, r.status,
+      SELECT r.id, r.property_id, r.room_label,
+        CASE WHEN t.id IS NOT NULL THEN 'occupied' ELSE r.status END as status,
         t.id as tenant_id, t.name as tenant_name, t.rent,
         t.contract_start, t.contract_end, t.deposit, t.commission,
         t.elec_rate, t.water_type, t.water_rate, t.outstanding_balance,
