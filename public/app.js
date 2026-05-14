@@ -881,11 +881,8 @@ async function renderBilling() {
   const month = S.data.billingMonth || ym();
   S.data.billingMonth = month;
 
-  const [tenants, existingRows, properties] = await Promise.all([
-    api.get('/api/tenants'),
-    api.get(`/api/billing?month=${month}`),
-    api.get('/api/properties'),
-  ]);
+  const { tenants, properties, billing: existingRows, lastReadings, invoiceData } =
+    await api.get(`/api/billing-page?month=${month}`);
 
   const existingMap = {};
   existingRows.forEach(r => { existingMap[r.room_id] = r; });
@@ -897,27 +894,13 @@ async function renderBilling() {
   window._billingCtx = { tenantByRoom: {}, propByCode, month, prevBalByRoom: {}, prevMonthByRoom: {} };
   tenants.forEach(t_ => { window._billingCtx.tenantByRoom[t_.room_id] = t_; });
 
-  // Fetch last readings for all rooms with meters (in parallel)
-  const meterRooms = tenants.filter(t_ => t_.elec_rate > 0 || t_.water_type === 'meter');
-  const lastReadings = {};
-  await Promise.all(meterRooms.map(async t_ => {
-    if (existingMap[t_.room_id]) return; // already have data for this month
-    try {
-      const lr = await api.get(`/api/billing/last-reading?room_id=${t_.room_id}&before_month=${month}`);
-      lastReadings[t_.room_id] = lr;
-    } catch { /* ignore */ }
-  }));
-
-  // Fetch FY-scoped previous balances for unbilled rooms — prevents future-month payments
-  // from appearing as credits in historical months (chronological carry-forward enforcement).
+  // Build prevBalMap from pre-fetched invoiceData (FY-scoped, chronological carry-forward)
   const prevBalMap = {};
-  await Promise.all(tenants.map(async t_ => {
-    if (existingMap[t_.room_id]) return; // billed: use ex.prev_balance from getBilling
-    try {
-      const inv = await api.get(`/api/billing/invoice?room_id=${t_.room_id}&month=${month}`);
-      prevBalMap[t_.room_id] = { outstanding: inv.prev_outstanding || 0, prevMonth: inv.prev_billing_month || null };
-    } catch { /* ignore */ }
-  }));
+  tenants.forEach(t_ => {
+    if (existingMap[t_.room_id]) return;
+    const inv = invoiceData[t_.room_id] || {};
+    prevBalMap[t_.room_id] = { outstanding: inv.prev_outstanding || 0, prevMonth: inv.prev_billing_month || null };
+  });
 
   let lastPropId = null;
   const unitCards = tenants.map(t_ => {

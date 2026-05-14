@@ -321,6 +321,7 @@ async function route(req, res, path, url) {
   if (path === '/api/properties'             && m === 'GET')    return getProperties(res);
   if (path === '/api/tenants/directory'      && m === 'GET')    return getTenantsDirectory(res);
   if (path === '/api/tenants'                && m === 'GET')    return getTenants(res, url);
+  if (path === '/api/billing-page'           && m === 'GET')    return getBillingPage(res, url);
   if (path === '/api/billing'                && m === 'GET')    return getBilling(res, url);
   if (path === '/api/billing/last-reading'   && m === 'GET')    return getLastReading(res, url);
   if (path === '/api/billing/invoice'        && m === 'GET')    return getBillingInvoice(res, url);
@@ -782,6 +783,120 @@ async function getBillingInvoice(res, url) {
     prev_billing_month:  prevBillingMonth,
     prev_outstanding:    prevOutstanding,
     fy_start:            fyStart,
+  });
+}
+
+async function getBillingPage(res, url) {
+  const month = url.searchParams.get('month');
+  if (!month) return sendErr(res, 'month required');
+
+  const safeMonth = month.replace(/[^0-9-]/g, '');
+  const [y, mo]   = safeMonth.split('-').map(Number);
+  const fyYear    = mo >= 4 ? y : y - 1;
+  const fyStart   = `${fyYear}-04`;
+
+  const [tenantsRes, propertiesRes, billingRes, lastReadingsRes, invoiceRes] = await Promise.all([
+    DB.prepare(`
+      SELECT t.*, r.room_label, r.property_id, p.code as property_code,
+        (SELECT MAX(mr.billing_month) FROM meter_readings mr WHERE mr.room_id = t.room_id) as last_billing_month
+      FROM tenants t
+      JOIN rooms r ON r.id = t.room_id
+      JOIN properties p ON p.id = r.property_id
+      WHERE (t.active = 1 OR (t.active = 0 AND t.contract_end >= date('now', '-6 months')))
+      ORDER BY p.sort_order, p.id, r.room_label`).all(),
+
+    DB.prepare(`SELECT * FROM properties ORDER BY sort_order, id`).all(),
+
+    DB.prepare(`
+      SELECT mr.*, r.room_label, r.property_id, p.code as property_code,
+        t.name as tenant_name, t.id as tenant_id,
+        CASE WHEN t.id IS NOT NULL THEN
+          COALESCE((SELECT SUM(pay.amount) FROM payments pay
+            WHERE pay.tenant_id = t.id AND pay.billing_month = mr.billing_month), 0)
+        ELSE 0 END as total_paid_month,
+        CASE WHEN t.id IS NOT NULL THEN
+          COALESCE((SELECT SUM(mr2.total_bill) FROM meter_readings mr2
+            WHERE mr2.room_id = mr.room_id
+              AND mr2.billing_month <= mr.billing_month
+              AND mr2.billing_month >= '${fyStart}'
+          ), 0) - COALESCE((SELECT SUM(pay2.amount) FROM payments pay2
+            WHERE pay2.tenant_id = t.id
+              AND pay2.billing_month IS NOT NULL
+              AND pay2.billing_month <= mr.billing_month
+              AND pay2.billing_month >= '${fyStart}'
+          ), 0)
+        ELSE 0 END as running_balance,
+        CASE WHEN t.id IS NOT NULL THEN
+          COALESCE((SELECT SUM(mr2.total_bill) FROM meter_readings mr2
+            WHERE mr2.room_id = mr.room_id
+              AND mr2.billing_month < mr.billing_month
+              AND mr2.billing_month >= '${fyStart}'
+          ), 0) - COALESCE((SELECT SUM(pay2.amount) FROM payments pay2
+            WHERE pay2.tenant_id = t.id
+              AND pay2.billing_month IS NOT NULL
+              AND pay2.billing_month < mr.billing_month
+              AND pay2.billing_month >= '${fyStart}'
+          ), 0)
+        ELSE 0 END as prev_balance,
+        (SELECT MAX(mr2.billing_month) FROM meter_readings mr2
+          WHERE mr2.room_id = mr.room_id AND mr2.billing_month < mr.billing_month) as prev_billing_month
+      FROM meter_readings mr
+      JOIN rooms r ON r.id = mr.room_id
+      JOIN properties p ON p.id = r.property_id
+      LEFT JOIN tenants t ON t.room_id = mr.room_id AND t.active = 1
+      WHERE mr.billing_month = '${safeMonth}'
+      ORDER BY p.sort_order, p.id, r.room_label`).all(),
+
+    DB.prepare(`
+      SELECT mr.room_id, mr.elec_curr, mr.water_curr, mr.billing_month
+      FROM meter_readings mr
+      WHERE mr.billing_month < ?
+        AND mr.billing_month = (
+          SELECT MAX(mr2.billing_month) FROM meter_readings mr2
+          WHERE mr2.room_id = mr.room_id AND mr2.billing_month < ?
+        )`).bind(safeMonth, safeMonth).all(),
+
+    DB.prepare(`
+      SELECT t.room_id,
+        (SELECT MIN(mr2.billing_month) FROM meter_readings mr2
+          WHERE mr2.room_id = t.room_id) as first_billing_month,
+        (SELECT MAX(mr2.billing_month) FROM meter_readings mr2
+          WHERE mr2.room_id = t.room_id
+            AND mr2.billing_month < ?
+            AND mr2.billing_month >= ?) as prev_billing_month_raw,
+        COALESCE((SELECT SUM(mr2.total_bill) FROM meter_readings mr2
+          WHERE mr2.room_id = t.room_id
+            AND mr2.billing_month < ?
+            AND mr2.billing_month >= ?), 0)
+        - COALESCE((SELECT SUM(p.amount) FROM payments p
+          WHERE p.tenant_id = t.id
+            AND p.billing_month IS NOT NULL
+            AND p.billing_month < ?
+            AND p.billing_month >= ?), 0) as prev_outstanding_raw
+      FROM tenants t
+      WHERE (t.active = 1 OR (t.active = 0 AND t.contract_end >= date('now', '-6 months')))`
+    ).bind(safeMonth, fyStart, safeMonth, fyStart, safeMonth, fyStart).all(),
+  ]);
+
+  const lastReadings = {};
+  for (const r of lastReadingsRes.results) {
+    lastReadings[r.room_id] = { elec_curr: r.elec_curr, water_curr: r.water_curr, billing_month: r.billing_month };
+  }
+
+  const invoiceData = {};
+  for (const r of invoiceRes.results) {
+    const isFirstOrBefore  = r.first_billing_month === null || safeMonth <= r.first_billing_month;
+    const prevBillingMonth = (!isFirstOrBefore && r.prev_billing_month_raw) ? r.prev_billing_month_raw : null;
+    const prevOutstanding  = prevBillingMonth ? (r.prev_outstanding_raw ?? 0) : 0;
+    invoiceData[r.room_id] = { prev_billing_month: prevBillingMonth, prev_outstanding: prevOutstanding };
+  }
+
+  return sendJson(res, {
+    tenants:    tenantsRes.results,
+    properties: propertiesRes.results,
+    billing:    billingRes.results,
+    lastReadings,
+    invoiceData,
   });
 }
 
