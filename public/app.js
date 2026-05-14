@@ -1271,12 +1271,8 @@ async function renderPayments() {
   if (tenantFilter) params.set('tenant_id', tenantFilter);
   if (!month) params.set('fy', payFY);
 
-  const [payments, tenants, properties, allTimePay] = await Promise.all([
-    api.get(`/api/payments?${params}`),
-    api.get('/api/tenants'),
-    api.get('/api/properties'),
-    api.get('/api/payments?total_only=true'),
-  ]);
+  const { payments, tenants, properties, allTimeTotal } =
+    await api.get(`/api/payments-page?${params}`);
 
   const propByCode = {};
   properties.forEach(p => { propByCode[p.code] = p; });
@@ -1376,7 +1372,7 @@ async function renderPayments() {
     <div class="section mb-16">
       <div class="section-body" style="padding:16px 20px">
         <span style="font-size:15px;font-weight:600;color:var(--muted)">${t('total_payments')}:</span>
-        <span class="td-money" style="font-size:15px;margin-left:8px">${hk(allTimePay.total)}</span>
+        <span class="td-money" style="font-size:15px;margin-left:8px">${hk(allTimeTotal)}</span>
       </div>
     </div>
     <div class="section">

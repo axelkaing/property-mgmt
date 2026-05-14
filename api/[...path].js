@@ -325,6 +325,7 @@ async function route(req, res, path, url) {
   if (path === '/api/billing'                && m === 'GET')    return getBilling(res, url);
   if (path === '/api/billing/last-reading'   && m === 'GET')    return getLastReading(res, url);
   if (path === '/api/billing/invoice'        && m === 'GET')    return getBillingInvoice(res, url);
+  if (path === '/api/payments-page'          && m === 'GET')    return getPaymentsPage(res, url);
   if (path === '/api/payments'               && m === 'GET')    return getPayments(res, url);
   if (path === '/api/expenses'               && m === 'GET')    return getExpenses(res, url);
   if (path === '/api/summary'                && m === 'GET')    return getSummary(res, url);
@@ -963,6 +964,57 @@ async function getPayments(res, url) {
     ${where}
     ORDER BY p.payment_date DESC, p.id DESC`).bind(...binds).all();
   return sendJson(res, rows.results);
+}
+
+async function getPaymentsPage(res, url) {
+  const month    = url.searchParams.get('month');
+  const tenantId = url.searchParams.get('tenant_id');
+  const fy       = url.searchParams.get('fy');
+
+  const conditions = [], binds = [];
+  if (month)    { conditions.push(`p.billing_month=?`);  binds.push(month); }
+  if (tenantId) { conditions.push(`p.tenant_id=?`);      binds.push(tenantId); }
+  if (fy) {
+    const fyStart = `${fy}-04`, fyEnd = `${parseInt(fy)+1}-03`;
+    const dStart  = `${fy}-04-01`, dEnd = `${parseInt(fy)+1}-03-31`;
+    conditions.push(`((p.billing_month >= ? AND p.billing_month <= ?) OR (p.billing_month IS NULL AND p.payment_date >= ? AND p.payment_date <= ?))`);
+    binds.push(fyStart, fyEnd, dStart, dEnd);
+  }
+  const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
+
+  const [paymentsRes, tenantsRes, propertiesRes, totalRes] = await Promise.all([
+    DB.prepare(`
+      SELECT p.id, p.tenant_id, p.billing_month, p.payment_date, p.amount, p.method,
+             p.notes, p.verified, p.split_group,
+             CASE WHEN p.proof_image IS NOT NULL AND p.proof_image != '' THEN 1 ELSE 0 END as has_proof,
+             t.name as tenant_name, r.room_label, r.property_id, pr.code as property_code
+      FROM payments p
+      JOIN tenants t ON t.id = p.tenant_id
+      JOIN rooms r ON r.id = t.room_id
+      JOIN properties pr ON pr.id = r.property_id
+      ${where}
+      ORDER BY p.payment_date DESC, p.id DESC`).bind(...binds).all(),
+
+    DB.prepare(`
+      SELECT t.*, r.room_label, r.property_id, p.code as property_code,
+        (SELECT MAX(mr.billing_month) FROM meter_readings mr WHERE mr.room_id = t.room_id) as last_billing_month
+      FROM tenants t
+      JOIN rooms r ON r.id = t.room_id
+      JOIN properties p ON p.id = r.property_id
+      WHERE (t.active = 1 OR (t.active = 0 AND t.contract_end >= date('now', '-6 months')))
+      ORDER BY p.sort_order, p.id, r.room_label`).all(),
+
+    DB.prepare(`SELECT * FROM properties ORDER BY sort_order, id`).all(),
+
+    DB.prepare(`SELECT COALESCE(SUM(amount),0) as total FROM payments`).first(),
+  ]);
+
+  return sendJson(res, {
+    payments:   paymentsRes.results,
+    tenants:    tenantsRes.results,
+    properties: propertiesRes.results,
+    allTimeTotal: totalRes.total,
+  });
 }
 
 async function createPayment(req, res) {
