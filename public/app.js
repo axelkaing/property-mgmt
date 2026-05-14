@@ -1848,11 +1848,8 @@ async function renderExpenses() {
 
   const params = new URLSearchParams({ month: expMonth });
 
-  const [expenses, properties, allTimeExp] = await Promise.all([
-    api.get(`/api/expenses?${params}`),
-    api.get('/api/properties'),
-    api.get('/api/expenses?total_only=true'),
-  ]);
+  const { expenses, properties, allTimeTotal: allTimeExpTotal } =
+    await api.get(`/api/expenses-page?${params}`);
 
   const propById = {};
   const propSortMap = {};
@@ -1975,7 +1972,7 @@ async function renderExpenses() {
     <div class="section mb-16">
       <div class="section-body" style="padding:16px 20px">
         <span style="font-size:15px;font-weight:600;color:var(--muted)">${t('total_expenses_all_time')}:</span>
-        <span class="td-money" style="font-size:15px;margin-left:8px">${hk(allTimeExp.total)}</span>
+        <span class="td-money" style="font-size:15px;margin-left:8px">${hk(allTimeExpTotal)}</span>
       </div>
     </div>
 

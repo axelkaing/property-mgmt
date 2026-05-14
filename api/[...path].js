@@ -327,6 +327,7 @@ async function route(req, res, path, url) {
   if (path === '/api/billing/invoice'        && m === 'GET')    return getBillingInvoice(res, url);
   if (path === '/api/payments-page'          && m === 'GET')    return getPaymentsPage(res, url);
   if (path === '/api/payments'               && m === 'GET')    return getPayments(res, url);
+  if (path === '/api/expenses-page'          && m === 'GET')    return getExpensesPage(res, url);
   if (path === '/api/expenses'               && m === 'GET')    return getExpenses(res, url);
   if (path === '/api/summary'                && m === 'GET')    return getSummary(res, url);
   if (/^\/api\/receipt\/\d+$/.test(path)    && m === 'GET')    return getReceipt(res, seg(path, 3));
@@ -1107,6 +1108,46 @@ async function getExpenses(res, url) {
     ${where}
     ORDER BY e.expense_date DESC, e.id DESC`).bind(...binds).all();
   return sendJson(res, rows.results);
+}
+
+async function getExpensesPage(res, url) {
+  const month  = url.searchParams.get('month');
+  const propId = url.searchParams.get('property_id');
+  const fy     = url.searchParams.get('fy');
+  const year   = url.searchParams.get('year');
+
+  const conditions = [], binds = [];
+  if (month) {
+    conditions.push(`e.expense_date LIKE ?`);
+    binds.push(`${month}-%`);
+  } else if (fy) {
+    conditions.push(`e.expense_date >= ? AND e.expense_date <= ?`);
+    binds.push(`${fy}-04-01`, `${parseInt(fy)+1}-03-31`);
+  } else if (year) {
+    conditions.push(`e.expense_date LIKE ?`);
+    binds.push(`${year}-%`);
+  }
+  if (propId) { conditions.push(`e.property_id=?`); binds.push(propId); }
+  const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
+
+  const [expensesRes, propertiesRes, totalRes] = await Promise.all([
+    DB.prepare(`
+      SELECT e.*, p.code as property_code
+      FROM expenses e
+      LEFT JOIN properties p ON p.id = e.property_id
+      ${where}
+      ORDER BY e.expense_date DESC, e.id DESC`).bind(...binds).all(),
+
+    DB.prepare(`SELECT * FROM properties ORDER BY sort_order, id`).all(),
+
+    DB.prepare(`SELECT COALESCE(SUM(amount),0) as total FROM expenses`).first(),
+  ]);
+
+  return sendJson(res, {
+    expenses:     expensesRes.results,
+    properties:   propertiesRes.results,
+    allTimeTotal: totalRes.total,
+  });
 }
 
 async function createExpense(req, res) {
