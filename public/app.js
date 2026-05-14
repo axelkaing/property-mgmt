@@ -48,6 +48,7 @@ const STRINGS = {
     auto_prev:        'Auto from last month',
 
     payments_title:   'Payment Tracker',
+    total_payments:   'Total Payments (All Time)',
     add_payment:      'Add Payment',
     payment_date:     'Payment Date',
     billing_month_lbl:'Billing Month',
@@ -130,6 +131,7 @@ const STRINGS = {
     income_paid:      'Payments Received',
     total_income:     'Total Income',
     total_expenses:   'Total Expenses',
+    total_expenses_all_time: 'Total Expenses (All Time)',
     net_income:        'Net Income',
     mgmt_net_income:   'Management Net Income',
     after_tax_income:  'After-tax Income',
@@ -225,6 +227,7 @@ const STRINGS = {
     auto_prev:        '自動取上月讀數',
 
     payments_title:   '收款記錄',
+    total_payments:   '收款總計（全部）',
     add_payment:      '新增收款',
     payment_date:     '收款日期',
     billing_month_lbl:'帳單月份',
@@ -307,6 +310,7 @@ const STRINGS = {
     income_paid:      '已收款項',
     total_income:     '收入總計',
     total_expenses:   '支出總計',
+    total_expenses_all_time: '支出總計（全部）',
     net_income:        '淨收入',
     mgmt_net_income:   '管理淨收入',
     after_tax_income:  '稅後收入',
@@ -487,6 +491,12 @@ function fySelectOptions(selectedFY) {
 // ── Routing ──────────────────────────────────────────────────────────────────
 
 function navigate(view) {
+  if (S.view !== view) {
+    S.data.payMonth     = ym();
+    S.data.expMonth     = ym();
+    S.data.dashMonth    = ym();
+    S.data.billingMonth = ym();
+  }
   S.view = view;
   document.querySelectorAll('.nav-item').forEach(el => {
     el.classList.toggle('active', el.dataset.view === view);
@@ -1277,10 +1287,11 @@ async function renderPayments() {
   if (tenantFilter) params.set('tenant_id', tenantFilter);
   if (!month) params.set('fy', payFY);
 
-  const [payments, tenants, properties] = await Promise.all([
+  const [payments, tenants, properties, allTimePay] = await Promise.all([
     api.get(`/api/payments?${params}`),
     api.get('/api/tenants'),
     api.get('/api/properties'),
+    api.get('/api/payments?total_only=true'),
   ]);
 
   const propByCode = {};
@@ -1342,16 +1353,16 @@ async function renderPayments() {
         </tr>`);
     });
   }
+  const payTotal = sortedPayments.reduce((s, p) => s + (p.amount || 0), 0);
   if (sortedPayments.length > 0) {
-    const totalAmt = sortedPayments.reduce((s, p) => s + (p.amount || 0), 0);
     const ts = 'font-weight:bold;border-top:2px solid #d1d5db';
     payRowsArr.push(`<tr>
       <td class="col-mob-hide" style="${ts}"></td>
       <td class="col-mob-hide" style="${ts}"></td>
-      <td class="col-pay-tenant" style="${ts}">Total</td>
+      <td class="col-pay-tenant" style="${ts}">Subtotal</td>
       <td class="col-mob-hide" style="${ts}"></td>
       <td class="col-mob-hide" style="${ts}"></td>
-      <td class="td-money col-pay-amt" style="${ts}">${hk(totalAmt)}</td>
+      <td class="td-money col-pay-amt" style="${ts}">${hk(payTotal)}</td>
       <td class="col-mob-hide" style="${ts}"></td>
       <td class="col-mob-hide" style="${ts}"></td>
       <td class="col-pay-ver" style="${ts}"></td>
@@ -1376,6 +1387,12 @@ async function renderPayments() {
           </select>
           <button class="btn btn-ghost btn-sm" onclick="S.data.payMonth=ym();S.data.payTenantId='';renderPayments()">✕</button>
         </div>
+      </div>
+    </div>
+    <div class="section mb-16">
+      <div class="section-body" style="padding:16px 20px">
+        <span style="font-size:15px;font-weight:600;color:var(--muted)">${t('total_payments')}:</span>
+        <span class="td-money" style="font-size:15px;margin-left:8px">${hk(allTimePay.total)}</span>
       </div>
     </div>
     <div class="section">
@@ -1851,9 +1868,10 @@ async function renderExpenses() {
 
   const params = new URLSearchParams({ month: expMonth });
 
-  const [expenses, properties] = await Promise.all([
+  const [expenses, properties, allTimeExp] = await Promise.all([
     api.get(`/api/expenses?${params}`),
     api.get('/api/properties'),
+    api.get('/api/expenses?total_only=true'),
   ]);
 
   const propById = {};
@@ -1946,6 +1964,18 @@ async function renderExpenses() {
         </div>`);
     });
   }
+  if (sortedExpenses.length > 0) {
+    const expTotal = sortedExpenses.reduce((s, e) => s + (e.amount || 0), 0);
+    const ts = 'font-weight:bold;border-top:2px solid #d1d5db';
+    expRowsArr.push(`<tr>
+      <td class="col-mob-hide" style="${ts}"></td>
+      <td class="col-exp-date" style="${ts}">Subtotal</td>
+      <td class="col-exp-cat" style="${ts}"></td>
+      <td class="td-money col-exp-amt" style="${ts}">${hk(expTotal)}</td>
+      <td class="col-mob-hide" style="${ts}"></td>
+      <td class="col-mob-hide" style="${ts}"></td>
+    </tr>`);
+  }
   const rows = expRowsArr.join('');
   const cardHtml = expCardsArr.join('');
 
@@ -1964,8 +1994,8 @@ async function renderExpenses() {
 
     <div class="section mb-16">
       <div class="section-body" style="padding:16px 20px">
-        <span style="font-size:15px;font-weight:600;color:var(--muted)">${t('total_expenses')}:</span>
-        <span class="td-money" style="font-size:15px;margin-left:8px">${hk(grandTotal)}</span>
+        <span style="font-size:15px;font-weight:600;color:var(--muted)">${t('total_expenses_all_time')}:</span>
+        <span class="td-money" style="font-size:15px;margin-left:8px">${hk(allTimeExp.total)}</span>
       </div>
     </div>
 

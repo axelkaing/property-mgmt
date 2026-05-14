@@ -397,10 +397,10 @@ async function dashboard(res, url) {
             AND p2.billing_month < ? AND p2.billing_month >= ?
         ), 0) as prev_outstanding
       FROM rooms r
-      LEFT JOIN tenants t ON t.room_id = r.id AND t.active = 1
+      LEFT JOIN tenants t ON t.room_id = r.id AND (t.active = 1 OR (t.active = 0 AND t.contract_end >= ?))
       LEFT JOIN meter_readings mr ON mr.room_id = r.id AND mr.billing_month = ?
       LEFT JOIN properties prop ON prop.id = r.property_id
-      ORDER BY prop.sort_order, prop.id, r.room_label`).bind(currentMonth, currentMonth, fyStart, currentMonth, fyStart, currentMonth).all(),
+      ORDER BY prop.sort_order, prop.id, r.room_label`).bind(currentMonth, currentMonth, fyStart, currentMonth, fyStart, currentMonth, currentMonth).all(),
 
     DB.prepare(`
       SELECT t.id, t.name, t.contract_end, t.contract_start,
@@ -816,6 +816,10 @@ async function getReceipt(res, paymentId) {
 // ── Payments ──────────────────────────────────────────────────────────────────
 
 async function getPayments(res, url) {
+  if (url.searchParams.get('total_only') === 'true') {
+    const row = await DB.prepare(`SELECT COALESCE(SUM(amount),0) as total FROM payments`).first();
+    return sendJson(res, { total: row.total });
+  }
   const month    = url.searchParams.get('month');
   const tenantId = url.searchParams.get('tenant_id');
   const fy       = url.searchParams.get('fy');
@@ -906,6 +910,10 @@ async function deletePayment(res, id) {
 // ── Expenses ──────────────────────────────────────────────────────────────────
 
 async function getExpenses(res, url) {
+  if (url.searchParams.get('total_only') === 'true') {
+    const row = await DB.prepare(`SELECT COALESCE(SUM(amount),0) as total FROM expenses`).first();
+    return sendJson(res, { total: row.total });
+  }
   const propId = url.searchParams.get('property_id');
   const month  = url.searchParams.get('month');
   const fy     = url.searchParams.get('fy');
