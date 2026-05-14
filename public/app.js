@@ -2207,27 +2207,21 @@ async function viewPaymentProof(payId) {
 async function renderSummary() {
   const fy = S.data.globalFY !== undefined ? String(S.data.globalFY) : String(currentFY());
   const data = await api.get(`/api/summary?fy=${fy}`);
-  const { fyLabel: fyLbl, summary: s, propBreakdown, generalExpenses = {}, propertyExpenses = {} } = data;
 
-  const afterTaxIncome = s.netIncome - s.propertyTax;
-  const netCls      = s.netIncome     >= 0 ? 'text-success' : 'text-danger';
-  const afterTaxCls = afterTaxIncome  >= 0 ? 'text-success' : 'text-danger';
+  const {
+    summary: s, propBreakdown, generalExpenses = {}, propertyExpenses = {},
+    cySummary, cyPropBreakdown = [], cyGeneralExpenses = {}, cyPropertyExpenses = {},
+  } = data;
 
-  // Per-property breakdown: only Govt Rent deduction for tax calc
-  const propBDHtml = propBreakdown.map(p => `
-    <div class="prop-tax-card">
-      <div class="prop-tax-header">${p.code} <span style="font-weight:400;font-size:12px;opacity:.8">${p.address}</span></div>
-      <div class="tax-row"><span>${t('total_rental')}</span><strong>${hk(p.income)}</strong></div>
-      ${p.expenses.govtRent > 0 ? `<div class="tax-row"><span>${t('less_govt_rent')}</span><strong>− ${hk(p.expenses.govtRent)}</strong></div>` : ''}
-      <div class="tax-row" style="font-size:11px;color:var(--muted);padding-top:6px;border-top:1px dashed var(--border);margin-top:4px;font-style:italic">
-        <span>${t('tax_formula')}</span>
-      </div>
-      <div class="tax-row total">
-        <span>${t('est_tax')}</span><strong class="text-danger">${hk(p.tax)}</strong>
-      </div>
-    </div>`).join('');
+  const fyNext = String(parseInt(fy) + 1);
+  const tc = S.lang === 'tc';
+  const fySectionTitle = tc
+    ? `港稅務年度（${fy}年4月 – ${fyNext}年3月）`
+    : `HK Fiscal Year (Apr ${fy} – Mar ${fyNext})`;
+  const cySectionTitle = tc
+    ? `公曆年度（${fy}年1月 – ${fy}年12月）`
+    : `Calendar Year (Jan ${fy} – Dec ${fy})`;
 
-  // Full expenses breakdown: General (null property_id) + Property (non-null)
   const expCatKeys = [
     ['govtRent',    () => t('less_govt_rent')],
     ['govtRates',   () => t('less_govt_rates')],
@@ -2240,68 +2234,109 @@ async function renderSummary() {
     ['garbage',     () => t('cat_garbage')],
     ['other',       () => t('cat_other')],
   ];
-  const genTotal  = generalExpenses.total  || 0;
-  const propTotal = propertyExpenses.total || 0;
-  const genRows  = expCatKeys.filter(([k]) => generalExpenses[k]  > 0).map(([k, lbl]) => `<div class="tax-row"><span>${lbl()}</span><strong>${hk(generalExpenses[k])}</strong></div>`).join('');
-  const propRows = expCatKeys.filter(([k]) => propertyExpenses[k] > 0).map(([k, lbl]) => `<div class="tax-row"><span>${lbl()}</span><strong>${hk(propertyExpenses[k])}</strong></div>`).join('');
-  const expBreakdownHtml = `
-    <div style="margin-top:20px">
-      <div style="background:#f1f5f9;border:1.5px solid var(--border);border-radius:var(--radius);padding:14px">
-        <div style="font-size:14px;font-weight:700;margin-bottom:12px;padding-bottom:8px;border-bottom:1px solid var(--border)">${S.lang==='tc'?'支出明細':'Expenses Breakdown'}</div>
-        <div style="font-size:11px;font-weight:700;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px">${t('gen_expenses')}</div>
-        ${genRows || `<div style="color:var(--muted);font-size:12px;padding:2px 0">${S.lang==='tc'?'—':'—'}</div>`}
-        <div class="tax-row" style="border-top:1px solid var(--border);margin-top:4px;padding-top:6px;font-weight:600">
-          <span>${S.lang==='tc'?'小計':'Subtotal'}</span><strong>${hk(genTotal)}</strong>
+
+  function buildSectionHTML(sec, propBD, genExp, propExp) {
+    const afterTax = sec.netIncome - sec.propertyTax;
+    const netCls      = sec.netIncome >= 0 ? 'text-success' : 'text-danger';
+    const afterTaxCls = afterTax      >= 0 ? 'text-success' : 'text-danger';
+
+    const propBDHtml = propBD.map(p => `
+      <div class="prop-tax-card">
+        <div class="prop-tax-header">${p.code} <span style="font-weight:400;font-size:12px;opacity:.8">${p.address}</span></div>
+        <div class="tax-row"><span>${t('total_rental')}</span><strong>${hk(p.income)}</strong></div>
+        ${p.expenses.govtRent > 0 ? `<div class="tax-row"><span>${t('less_govt_rent')}</span><strong>− ${hk(p.expenses.govtRent)}</strong></div>` : ''}
+        <div class="tax-row" style="font-size:11px;color:var(--muted);padding-top:6px;border-top:1px dashed var(--border);margin-top:4px;font-style:italic">
+          <span>${t('tax_formula')}</span>
         </div>
-        <div style="font-size:11px;font-weight:700;color:var(--muted);margin-top:14px;margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px">${S.lang==='tc'?'物業支出':'Property Expenses'}</div>
-        ${propRows || `<div style="color:var(--muted);font-size:12px;padding:2px 0">${S.lang==='tc'?'—':'—'}</div>`}
-        <div class="tax-row" style="border-top:1px solid var(--border);margin-top:4px;padding-top:6px;font-weight:600">
-          <span>${S.lang==='tc'?'小計':'Subtotal'}</span><strong>${hk(propTotal)}</strong>
+        <div class="tax-row total">
+          <span>${t('est_tax')}</span><strong class="text-danger">${hk(p.tax)}</strong>
         </div>
-        <div class="tax-row" style="border-top:2px solid var(--accent);margin-top:10px;padding-top:10px;font-weight:700;font-size:14px">
-          <span>${t('total_expenses')}</span><strong class="text-danger">${hk(s.totalExpenses)}</strong>
+      </div>`).join('');
+
+    const genTotal  = genExp.total  || 0;
+    const propTotal = propExp.total || 0;
+    const genRows  = expCatKeys.filter(([k]) => genExp[k]  > 0).map(([k, lbl]) => `<div class="tax-row"><span>${lbl()}</span><strong>${hk(genExp[k])}</strong></div>`).join('');
+    const propRows = expCatKeys.filter(([k]) => propExp[k] > 0).map(([k, lbl]) => `<div class="tax-row"><span>${lbl()}</span><strong>${hk(propExp[k])}</strong></div>`).join('');
+
+    return `
+      <div class="summary-stat-grid summary-stat-row1">
+        <div class="stat-card green">
+          <div class="stat-label">${t('total_income')}</div>
+          <div class="stat-value" style="font-size:20px">${hk(sec.totalIncome)}</div>
+        </div>
+        <div class="stat-card red">
+          <div class="stat-label">${t('total_expenses')}</div>
+          <div class="stat-value" style="font-size:20px">${hk(sec.totalExpenses)}</div>
+        </div>
+        <div class="stat-card" style="border-color:${sec.netIncome>=0?'var(--success)':'var(--danger)'}">
+          <div class="stat-label">${t('mgmt_net_income')}</div>
+          <div class="stat-value ${netCls}" style="font-size:20px">${hk(sec.netIncome)}</div>
         </div>
       </div>
-    </div>`;
+      <div class="summary-stat-grid summary-stat-row2">
+        <div class="stat-card amber">
+          <div class="stat-label">${t('est_tax')}</div>
+          <div class="stat-value" style="font-size:20px">${hk(sec.propertyTax)}</div>
+          <div class="stat-formula">${t('tax_formula')}</div>
+        </div>
+        <div class="stat-card" style="border-color:${afterTax>=0?'var(--success)':'var(--danger)'}">
+          <div class="stat-label">${t('after_tax_income')}</div>
+          <div class="stat-value ${afterTaxCls}" style="font-size:20px">${hk(afterTax)}</div>
+        </div>
+      </div>
+      <div class="section mt-16">
+        <div class="section-header"><h3>🏠 ${t('prop_breakdown')}</h3></div>
+        <div class="section-body">
+          <div class="prop-tax-grid">${propBDHtml}</div>
+          <div style="margin-top:20px">
+            <div style="background:#f1f5f9;border:1.5px solid var(--border);border-radius:var(--radius);padding:14px">
+              <div style="font-size:14px;font-weight:700;margin-bottom:12px;padding-bottom:8px;border-bottom:1px solid var(--border)">${tc?'支出明細':'Expenses Breakdown'}</div>
+              <div style="font-size:11px;font-weight:700;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px">${t('gen_expenses')}</div>
+              ${genRows || `<div style="color:var(--muted);font-size:12px;padding:2px 0">—</div>`}
+              <div class="tax-row" style="border-top:1px solid var(--border);margin-top:4px;padding-top:6px;font-weight:600">
+                <span>${tc?'小計':'Subtotal'}</span><strong>${hk(genTotal)}</strong>
+              </div>
+              <div style="font-size:11px;font-weight:700;color:var(--muted);margin-top:14px;margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px">${tc?'物業支出':'Property Expenses'}</div>
+              ${propRows || `<div style="color:var(--muted);font-size:12px;padding:2px 0">—</div>`}
+              <div class="tax-row" style="border-top:1px solid var(--border);margin-top:4px;padding-top:6px;font-weight:600">
+                <span>${tc?'小計':'Subtotal'}</span><strong>${hk(propTotal)}</strong>
+              </div>
+              <div class="tax-row" style="border-top:2px solid var(--accent);margin-top:10px;padding-top:10px;font-weight:700;font-size:14px">
+                <span>${t('total_expenses')}</span><strong class="text-danger">${hk(sec.totalExpenses)}</strong>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  const cfY = currentFY();
+  const yearOpts = Array.from({ length: cfY - 2025 }, (_, i) => 2026 + i)
+    .map(y => `<option value="${y}" ${y == fy ? 'selected' : ''}>${y}</option>`).join('');
 
   $$('view-container').innerHTML = `
     <div class="page-header">
       <h2>${t('summary_title')}</h2>
-      <span style="font-weight:700;color:var(--accent);font-size:14px">${fyLbl}</span>
+      <select onchange="S.data.globalFY=parseInt(this.value); renderSummary()" style="font-weight:600;font-size:14px">
+        ${yearOpts}
+      </select>
     </div>
 
-    <div class="summary-stat-grid summary-stat-row1">
-      <div class="stat-card green">
-        <div class="stat-label">${t('total_income')}</div>
-        <div class="stat-value" style="font-size:20px">${hk(s.totalIncome)}</div>
+    <div class="section mb-16" style="border-left:4px solid var(--accent)">
+      <div class="section-header">
+        <h3 style="color:var(--accent)">${fySectionTitle}</h3>
       </div>
-      <div class="stat-card red">
-        <div class="stat-label">${t('total_expenses')}</div>
-        <div class="stat-value" style="font-size:20px">${hk(s.totalExpenses)}</div>
-      </div>
-      <div class="stat-card" style="border-color:${s.netIncome>=0?'var(--success)':'var(--danger)'}">
-        <div class="stat-label">${t('mgmt_net_income')}</div>
-        <div class="stat-value ${netCls}" style="font-size:20px">${hk(s.netIncome)}</div>
+      <div class="section-body" style="padding:16px 20px 20px">
+        ${buildSectionHTML(s, propBreakdown, generalExpenses, propertyExpenses)}
       </div>
     </div>
 
-    <div class="summary-stat-grid summary-stat-row2">
-      <div class="stat-card amber">
-        <div class="stat-label">${t('est_tax')}</div>
-        <div class="stat-value" style="font-size:20px">${hk(s.propertyTax)}</div>
-        <div class="stat-formula">${t('tax_formula')}</div>
+    <div class="section" style="border-left:4px solid var(--success)">
+      <div class="section-header">
+        <h3 style="color:var(--success)">${cySectionTitle}</h3>
       </div>
-      <div class="stat-card" style="border-color:${afterTaxIncome>=0?'var(--success)':'var(--danger)'}">
-        <div class="stat-label">${t('after_tax_income')}</div>
-        <div class="stat-value ${afterTaxCls}" style="font-size:20px">${hk(afterTaxIncome)}</div>
-      </div>
-    </div>
-
-    <div class="section mt-16">
-      <div class="section-header"><h3>🏠 ${t('prop_breakdown')}</h3></div>
-      <div class="section-body">
-        <div class="prop-tax-grid">${propBDHtml}</div>
-        ${expBreakdownHtml}
+      <div class="section-body" style="padding:16px 20px 20px">
+        ${buildSectionHTML(cySummary, cyPropBreakdown, cyGeneralExpenses, cyPropertyExpenses)}
       </div>
     </div>`;
 }
