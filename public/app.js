@@ -2425,6 +2425,12 @@ function showApp() {
   const sel = document.getElementById('global-fy-select');
   if (sel) sel.innerHTML = fySelectOptions(globalFY);
   navigate('dashboard');
+  if (window.innerWidth < 768) {
+    document.querySelector('.sidebar')?.classList.remove('open');
+    document.getElementById('sidebar-overlay')?.classList.remove('visible');
+    const btn = document.getElementById('hamburger-btn');
+    if (btn) btn.textContent = '☰';
+  }
 }
 
 // ── Expose globals ──────────────────────────────────────────────────────────
