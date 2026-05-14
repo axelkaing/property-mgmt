@@ -318,6 +318,7 @@ async function route(req, res, path, url) {
 
   // Read-only routes (viewer and admin):
   if (path === '/api/dashboard'              && m === 'GET')    return dashboard(res, url);
+  if (path === '/api/dashboard-page'         && m === 'GET')    return dashboard(res, url);
   if (path === '/api/properties'             && m === 'GET')    return getProperties(res);
   if (path === '/api/tenants/directory'      && m === 'GET')    return getTenantsDirectory(res);
   if (path === '/api/tenants'                && m === 'GET')    return getTenants(res, url);

@@ -528,7 +528,7 @@ async function renderDashboard() {
   if (!S.data.dashMonth) S.data.dashMonth = ym();
   const dashMonth = S.data.dashMonth;
   $$('view-container').innerHTML = `<div class="empty-state">${t('loading')}</div>`;
-  const data = await api.get(`/api/dashboard?month=${dashMonth}`);
+  const data = await api.get(`/api/dashboard-page?month=${dashMonth}`);
   const { properties, rooms, expiring, totalMonthlyRent, paymentStatusMap = {} } = data;
 
   const roomsByProp = {};
