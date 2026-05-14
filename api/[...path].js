@@ -1025,159 +1025,37 @@ async function viewPaymentProof(req, res, paymentId) {
 
 // ── Annual Summary ────────────────────────────────────────────────────────────
 
-function buildSummaryPayload(incomeRows, expCatRows, expPropRows) {
-  const catMap = {};
-  expCatRows.forEach(r => { catMap[r.category] = r.total; });
-
-  const totalIncome   = incomeRows.reduce((s, r) => s + r.total_income, 0);
-  const govtRent      = catMap['govt_rent']    || 0;
-  const govtRates     = catMap['govt_rates']   || 0;
-  const repairs       = catMap['repairs']      || 0;
-  const insurance     = catMap['insurance']    || 0;
-  const stampDuty     = catMap['stamp_duty']   || 0;
-  const handlingFee   = catMap['handling_fee'] || 0;
-  const electricity   = catMap['electricity']  || 0;
-  const water         = catMap['water']        || 0;
-  const garbage       = catMap['garbage']      || 0;
-  const other         = catMap['other']        || 0;
-  const totalExpenses = Object.values(catMap).reduce((s, v) => s + v, 0);
-  const netIncome     = totalIncome - totalExpenses;
-  const taxBase       = Math.max(0, totalIncome - govtRent);
-  const propertyTax   = taxBase * 0.8 * 0.15;
-
-  const propExpMap = {};
-  expPropRows.forEach(r => {
-    if (!propExpMap[r.property_id]) propExpMap[r.property_id] = {};
-    propExpMap[r.property_id][r.category] = r.total;
-  });
-
-  const genExp = propExpMap[null] || {};
-  const generalExpenses = {
-    govtRent:    genExp['govt_rent']    || 0,
-    govtRates:   genExp['govt_rates']   || 0,
-    repairs:     genExp['repairs']      || 0,
-    insurance:   genExp['insurance']    || 0,
-    stampDuty:   genExp['stamp_duty']   || 0,
-    handlingFee: genExp['handling_fee'] || 0,
-    electricity: genExp['electricity']  || 0,
-    water:       genExp['water']        || 0,
-    garbage:     genExp['garbage']      || 0,
-    other:       genExp['other']        || 0,
-    total:       Object.values(genExp).reduce((s, v) => s + v, 0),
-  };
-
-  const propExpByCategory = {};
-  Object.entries(propExpMap).forEach(([propId, cats]) => {
-    if (propId === 'null') return;
-    Object.entries(cats).forEach(([cat, amt]) => {
-      propExpByCategory[cat] = (propExpByCategory[cat] || 0) + amt;
-    });
-  });
-  const propertyExpenses = {
-    govtRent:    propExpByCategory['govt_rent']    || 0,
-    govtRates:   propExpByCategory['govt_rates']   || 0,
-    repairs:     propExpByCategory['repairs']      || 0,
-    insurance:   propExpByCategory['insurance']    || 0,
-    stampDuty:   propExpByCategory['stamp_duty']   || 0,
-    handlingFee: propExpByCategory['handling_fee'] || 0,
-    electricity: propExpByCategory['electricity']  || 0,
-    water:       propExpByCategory['water']        || 0,
-    garbage:     propExpByCategory['garbage']      || 0,
-    other:       propExpByCategory['other']        || 0,
-    total:       Object.values(propExpByCategory).reduce((s, v) => s + v, 0),
-  };
-
-  const propBreakdown = incomeRows.map(p => {
-    const exp = propExpMap[p.id] || {};
-    const pGovtRent = exp['govt_rent'] || 0;
-    const pTotalExp = Object.values(exp).reduce((s, v) => s + v, 0);
-    const pTaxBase  = Math.max(0, p.total_income - pGovtRent);
-    return {
-      id: p.id, code: p.code, address: p.address,
-      income: p.total_income,
-      expenses: {
-        govtRent:    pGovtRent,
-        govtRates:   exp['govt_rates']   || 0,
-        repairs:     exp['repairs']      || 0,
-        insurance:   exp['insurance']    || 0,
-        stampDuty:   exp['stamp_duty']   || 0,
-        handlingFee: exp['handling_fee'] || 0,
-        electricity: exp['electricity']  || 0,
-        water:       exp['water']        || 0,
-        garbage:     exp['garbage']      || 0,
-        other:       exp['other']        || 0,
-      },
-      totalExpenses: pTotalExp,
-      netIncome: p.total_income - pTotalExp,
-      taxBase: pTaxBase,
-      tax: pTaxBase * 0.8 * 0.15,
-    };
-  });
-
-  return {
-    summary: {
-      totalIncome, govtRent, govtRates, repairs, insurance, stampDuty, handlingFee,
-      electricity, water, garbage, other,
-      totalExpenses, netIncome, perOwner: netIncome / 5,
-      taxBase, propertyTax,
-    },
-    propBreakdown,
-    generalExpenses,
-    propertyExpenses,
-  };
-}
-
 async function getSummary(res, url) {
   const fy     = url.searchParams.get('fy') || '2026';
   const fyNext = String(parseInt(fy) + 1);
   const fyLabel = `${fy}/${fyNext.slice(-2)}`;
 
-  const mStart   = `${fy}-04`,      mEnd   = `${fyNext}-03`;
-  const dStart   = `${fy}-04-01`,   dEnd   = `${fyNext}-03-31`;
-  const cyMStart = `${fy}-01`,      cyMEnd = `${fy}-12`;
-  const cyDStart = `${fy}-01-01`,   cyDEnd = `${fy}-12-31`;
+  const fyDStart = `${fy}-04-01`,  fyDEnd = `${fyNext}-03-31`;
+  const cyMStart = `${fy}-01`,     cyMEnd = `${fy}-12`;
+  const cyDStart = `${fy}-01-01`,  cyDEnd = `${fy}-12-31`;
 
-  const incomeQ  = (ms, me) => DB.prepare(`
-    SELECT pr.id, pr.code, pr.address,
-      COALESCE(SUM(pay.amount), 0) as total_income
-    FROM properties pr
-    LEFT JOIN rooms r ON r.property_id = pr.id
-    LEFT JOIN tenants t ON t.room_id = r.id
-    LEFT JOIN payments pay ON pay.tenant_id = t.id
-      AND pay.billing_month >= ? AND pay.billing_month <= ?
-    GROUP BY pr.id ORDER BY pr.sort_order, pr.id`).bind(ms, me).all();
-
-  const expCatQ  = (ds, de) => DB.prepare(`
-    SELECT category, COALESCE(SUM(amount), 0) as total
-    FROM expenses
-    WHERE expense_date >= ? AND expense_date <= ?
-    GROUP BY category`).bind(ds, de).all();
-
-  const expPropQ = (ds, de) => DB.prepare(`
-    SELECT e.property_id, pr.code, e.category,
-      COALESCE(SUM(e.amount), 0) as total
-    FROM expenses e
-    LEFT JOIN properties pr ON pr.id = e.property_id
-    WHERE e.expense_date >= ? AND e.expense_date <= ?
-    GROUP BY e.property_id, e.category`).bind(ds, de).all();
-
-  const [fyInc, fyExpCat, fyExpProp, cyInc, cyExpCat, cyExpProp] = await Promise.all([
-    incomeQ(mStart, mEnd), expCatQ(dStart, dEnd), expPropQ(dStart, dEnd),
-    incomeQ(cyMStart, cyMEnd), expCatQ(cyDStart, cyDEnd), expPropQ(cyDStart, cyDEnd),
+  const [rentRow, fyGovtRatesRow, cyIncomeRow, cyExpRows] = await Promise.all([
+    DB.prepare(`SELECT COALESCE(SUM(rent),0) as total FROM tenants WHERE active=1`).first(),
+    DB.prepare(`SELECT COALESCE(SUM(amount),0) as total FROM expenses WHERE category='govt_rates' AND expense_date >= ? AND expense_date <= ?`).bind(fyDStart, fyDEnd).first(),
+    DB.prepare(`SELECT COALESCE(SUM(amount),0) as total FROM payments WHERE billing_month >= ? AND billing_month <= ?`).bind(cyMStart, cyMEnd).first(),
+    DB.prepare(`SELECT category, COALESCE(SUM(amount),0) as total FROM expenses WHERE expense_date >= ? AND expense_date <= ? GROUP BY category`).bind(cyDStart, cyDEnd).all(),
   ]);
 
-  const fyData = buildSummaryPayload(fyInc.results, fyExpCat.results, fyExpProp.results);
-  const cyData = buildSummaryPayload(cyInc.results, cyExpCat.results, cyExpProp.results);
+  const contractRent  = (rentRow?.total || 0) * 12;
+
+  const fyGovtRates   = fyGovtRatesRow?.total || 0;
+  const fyTaxBase     = Math.max(0, contractRent - fyGovtRates);
+  const fyTax         = fyTaxBase * 0.8 * 0.15;
+
+  const cyExpCatMap   = {};
+  cyExpRows.results.forEach(r => { cyExpCatMap[r.category] = r.total; });
+  const cyIncome      = cyIncomeRow?.total || 0;
+  const cyTotalExp    = Object.values(cyExpCatMap).reduce((s, v) => s + v, 0);
+  const cyNetIncome   = cyIncome - cyTotalExp;
 
   return sendJson(res, {
     fy, fyLabel,
-    summary:          fyData.summary,
-    propBreakdown:    fyData.propBreakdown,
-    generalExpenses:  fyData.generalExpenses,
-    propertyExpenses: fyData.propertyExpenses,
-    cySummary:          cyData.summary,
-    cyPropBreakdown:    cyData.propBreakdown,
-    cyGeneralExpenses:  cyData.generalExpenses,
-    cyPropertyExpenses: cyData.propertyExpenses,
+    fyData: { contractRent, govtRates: fyGovtRates, taxBase: fyTaxBase, propertyTax: fyTax },
+    cyData: { income: cyIncome, expenses: cyExpCatMap, totalExpenses: cyTotalExp, netIncome: cyNetIncome },
   });
 }

@@ -421,11 +421,13 @@ function fmtMonth(m) { if (!m) return '–'; const [y, mo] = m.split('-'); retur
 function openMonthPicker(wrap) {
   const inp = wrap.querySelector('input[type=month]');
   if (!inp) return;
-  try { inp.showPicker(); } catch(e) { inp.focus(); }
+  try { inp.showPicker(); } catch(e) {
+    try { inp.click(); } catch(e2) { inp.focus(); }
+  }
 }
 
 function mkMonthInput(currentMonth, minMo, onChangeFn) {
-  return `<div class="month-input-wrap" onclick="openMonthPicker(this)">
+  return `<div class="month-input-wrap" onclick="openMonthPicker(this)" ontouchend="event.preventDefault();openMonthPicker(this)">
     <span class="month-input-icon">📅</span>
     <span class="month-input-label">${fmtMonth(currentMonth)}</span>
     <input type="month" value="${currentMonth}" min="${minMo || '2026-01'}" max="${ym()}"
@@ -2207,112 +2209,120 @@ async function viewPaymentProof(payId) {
 async function renderSummary() {
   const fy = S.data.globalFY !== undefined ? String(S.data.globalFY) : String(currentFY());
   const data = await api.get(`/api/summary?fy=${fy}`);
-
-  const {
-    summary: s, propBreakdown, generalExpenses = {}, propertyExpenses = {},
-    cySummary, cyPropBreakdown = [], cyGeneralExpenses = {}, cyPropertyExpenses = {},
-  } = data;
-
+  const { fyLabel, fyData, cyData } = data;
   const fyNext = String(parseInt(fy) + 1);
   const tc = S.lang === 'tc';
-  const fySectionTitle = tc
-    ? `港稅務年度（${fy}年4月 – ${fyNext}年3月）`
-    : `HK Fiscal Year (Apr ${fy} – Mar ${fyNext})`;
-  const cySectionTitle = tc
-    ? `公曆年度（${fy}年1月 – ${fy}年12月）`
-    : `Calendar Year (Jan ${fy} – Dec ${fy})`;
 
-  const expCatKeys = [
-    ['govtRent',    () => t('less_govt_rent')],
-    ['govtRates',   () => t('less_govt_rates')],
-    ['repairs',     () => t('less_repairs')],
-    ['insurance',   () => t('less_insurance')],
-    ['stampDuty',   () => t('less_stamp_duty')],
-    ['handlingFee', () => t('cat_handling_fee')],
-    ['electricity', () => t('cat_electricity')],
-    ['water',       () => t('cat_water')],
-    ['garbage',     () => t('cat_garbage')],
-    ['other',       () => t('cat_other')],
-  ];
+  const card  = 'background:#f8fafc;border:1.5px solid var(--border);border-radius:var(--radius);padding:18px 20px';
+  const sep   = 'border-top:2px solid var(--border);margin-top:12px;padding-top:12px';
+  const muted = 'font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px';
 
-  function buildSectionHTML(sec, propBD, genExp, propExp) {
-    const afterTax = sec.netIncome - sec.propertyTax;
-    const netCls      = sec.netIncome >= 0 ? 'text-success' : 'text-danger';
-    const afterTaxCls = afterTax      >= 0 ? 'text-success' : 'text-danger';
+  const catLabels = {
+    govt_rent:    t('less_govt_rent'),
+    govt_rates:   t('less_govt_rates'),
+    repairs:      t('less_repairs'),
+    insurance:    t('less_insurance'),
+    stamp_duty:   t('less_stamp_duty'),
+    handling_fee: t('cat_handling_fee'),
+    electricity:  t('cat_electricity'),
+    water:        t('cat_water'),
+    garbage:      t('cat_garbage'),
+    other:        t('cat_other'),
+  };
+  const catOrder = ['govt_rent','govt_rates','repairs','insurance','stamp_duty','handling_fee','electricity','water','garbage','other'];
 
-    const propBDHtml = propBD.map(p => `
-      <div class="prop-tax-card">
-        <div class="prop-tax-header">${p.code} <span style="font-weight:400;font-size:12px;opacity:.8">${p.address}</span></div>
-        <div class="tax-row"><span>${t('total_rental')}</span><strong>${hk(p.income)}</strong></div>
-        ${p.expenses.govtRent > 0 ? `<div class="tax-row"><span>${t('less_govt_rent')}</span><strong>− ${hk(p.expenses.govtRent)}</strong></div>` : ''}
-        <div class="tax-row" style="font-size:11px;color:var(--muted);padding-top:6px;border-top:1px dashed var(--border);margin-top:4px;font-style:italic">
-          <span>${t('tax_formula')}</span>
+  // ── Mode 2 — FY Tax Assessment ────────────────────────────────────────────
+  const { contractRent: fyContractRent, govtRates: fyGovtRates, taxBase: fyTaxBase, propertyTax: fyTax } = fyData;
+
+  const mode2HTML = `
+    <div style="${card}">
+      <div class="tax-row">
+        <span>${tc?'年度合約租金':'Total Contract Rent (annual)'}</span>
+        <strong>${hk(fyContractRent)}</strong>
+      </div>
+      <div class="tax-row" style="color:var(--danger)">
+        <span>${t('less_govt_rates')}</span>
+        <strong>− ${hk(fyGovtRates)}</strong>
+      </div>
+      <div style="${sep}">
+        <div class="tax-row">
+          <span>${tc?'應課稅額':'Taxable Amount'}</span>
+          <strong>${hk(fyTaxBase)}</strong>
         </div>
-        <div class="tax-row total">
-          <span>${t('est_tax')}</span><strong class="text-danger">${hk(p.tax)}</strong>
+        <div style="font-size:11px;color:var(--muted);text-align:right;margin-top:2px">× 80% × 15%</div>
+      </div>
+      <div style="${sep};border-top-color:var(--danger);border-top-width:3px">
+        <div class="tax-row">
+          <span style="font-weight:700;font-size:15px">${t('est_tax')}</span>
+          <strong class="text-danger" style="font-size:20px">${hk(fyTax)}</strong>
         </div>
+      </div>
+    </div>`;
+
+  // ── Shares of Rentals — CY ───────────────────────────────────────────────
+  const { income: cyIncome, expenses: cyExpMap, totalExpenses: cyTotalExp, netIncome: cyNetIncome } = cyData;
+  const cyAfterTax = cyNetIncome - fyTax;
+
+  const expRows = catOrder
+    .filter(k => (cyExpMap[k] || 0) > 0)
+    .map(k => `<div class="tax-row" style="font-size:13px">
+        <span style="color:var(--muted)">${catLabels[k]}</span>
+        <span>− ${hk(cyExpMap[k])}</span>
       </div>`).join('');
 
-    const genTotal  = genExp.total  || 0;
-    const propTotal = propExp.total || 0;
-    const genRows  = expCatKeys.filter(([k]) => genExp[k]  > 0).map(([k, lbl]) => `<div class="tax-row"><span>${lbl()}</span><strong>${hk(genExp[k])}</strong></div>`).join('');
-    const propRows = expCatKeys.filter(([k]) => propExp[k] > 0).map(([k, lbl]) => `<div class="tax-row"><span>${lbl()}</span><strong>${hk(propExp[k])}</strong></div>`).join('');
+  const netCls      = cyNetIncome >= 0 ? 'text-success' : 'text-danger';
+  const afterTaxCls = cyAfterTax  >= 0 ? 'text-success' : 'text-danger';
 
-    return `
-      <div class="summary-stat-grid summary-stat-row1">
-        <div class="stat-card green">
-          <div class="stat-label">${t('total_income')}</div>
-          <div class="stat-value" style="font-size:20px">${hk(sec.totalIncome)}</div>
-        </div>
-        <div class="stat-card red">
-          <div class="stat-label">${t('total_expenses')}</div>
-          <div class="stat-value" style="font-size:20px">${hk(sec.totalExpenses)}</div>
-        </div>
-        <div class="stat-card" style="border-color:${sec.netIncome>=0?'var(--success)':'var(--danger)'}">
-          <div class="stat-label">${t('mgmt_net_income')}</div>
-          <div class="stat-value ${netCls}" style="font-size:20px">${hk(sec.netIncome)}</div>
+  const mode1HTML = `
+    <div style="${card};margin-bottom:16px">
+      <div style="${muted}">${tc?'收入支出結算':'Income Statement'}</div>
+      <div class="tax-row">
+        <span>${tc?'收款總額':'Rental Income Received'}</span>
+        <strong class="text-success">${hk(cyIncome)}</strong>
+      </div>
+      <div style="margin-top:10px">
+        <div style="${muted}">${tc?'扣減支出':'Less: Expenses'}</div>
+        ${expRows || `<div style="color:var(--muted);font-size:12px">—</div>`}
+        <div class="tax-row" style="border-top:1px solid var(--border);margin-top:8px;padding-top:8px;font-weight:600">
+          <span>${t('total_expenses')}</span>
+          <span class="text-danger">− ${hk(cyTotalExp)}</span>
         </div>
       </div>
-      <div class="summary-stat-grid summary-stat-row2">
-        <div class="stat-card amber">
-          <div class="stat-label">${t('est_tax')}</div>
-          <div class="stat-value" style="font-size:20px">${hk(sec.propertyTax)}</div>
-          <div class="stat-formula">${t('tax_formula')}</div>
-        </div>
-        <div class="stat-card" style="border-color:${afterTax>=0?'var(--success)':'var(--danger)'}">
-          <div class="stat-label">${t('after_tax_income')}</div>
-          <div class="stat-value ${afterTaxCls}" style="font-size:20px">${hk(afterTax)}</div>
+      <div style="${sep};border-top-width:3px">
+        <div class="tax-row">
+          <span style="font-weight:700;font-size:15px">${t('net_income')}</span>
+          <strong class="${netCls}" style="font-size:18px">${hk(cyNetIncome)}</strong>
         </div>
       </div>
-      <div class="section mt-16">
-        <div class="section-header"><h3>🏠 ${t('prop_breakdown')}</h3></div>
-        <div class="section-body">
-          <div class="prop-tax-grid">${propBDHtml}</div>
-          <div style="margin-top:20px">
-            <div style="background:#f1f5f9;border:1.5px solid var(--border);border-radius:var(--radius);padding:14px">
-              <div style="font-size:14px;font-weight:700;margin-bottom:12px;padding-bottom:8px;border-bottom:1px solid var(--border)">${tc?'支出明細':'Expenses Breakdown'}</div>
-              <div style="font-size:11px;font-weight:700;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px">${t('gen_expenses')}</div>
-              ${genRows || `<div style="color:var(--muted);font-size:12px;padding:2px 0">—</div>`}
-              <div class="tax-row" style="border-top:1px solid var(--border);margin-top:4px;padding-top:6px;font-weight:600">
-                <span>${tc?'小計':'Subtotal'}</span><strong>${hk(genTotal)}</strong>
-              </div>
-              <div style="font-size:11px;font-weight:700;color:var(--muted);margin-top:14px;margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px">${tc?'物業支出':'Property Expenses'}</div>
-              ${propRows || `<div style="color:var(--muted);font-size:12px;padding:2px 0">—</div>`}
-              <div class="tax-row" style="border-top:1px solid var(--border);margin-top:4px;padding-top:6px;font-weight:600">
-                <span>${tc?'小計':'Subtotal'}</span><strong>${hk(propTotal)}</strong>
-              </div>
-              <div class="tax-row" style="border-top:2px solid var(--accent);margin-top:10px;padding-top:10px;font-weight:700;font-size:14px">
-                <span>${t('total_expenses')}</span><strong class="text-danger">${hk(sec.totalExpenses)}</strong>
-              </div>
-            </div>
-          </div>
+    </div>
+
+    <div style="${card};border-color:${cyAfterTax>=0?'var(--success)':'var(--danger)'}">
+      <div class="tax-row">
+        <span>${tc?'淨收入':'Net Income'}</span>
+        <strong>${hk(cyNetIncome)}</strong>
+      </div>
+      <div class="tax-row" style="color:var(--danger)">
+        <span>${tc?'減：估計物業稅 (稅務年度)':'Less: Est. Property Tax (FY)'}</span>
+        <strong>− ${hk(fyTax)}</strong>
+      </div>
+      <div style="${sep};border-top-width:3px;border-top-color:${cyAfterTax>=0?'var(--success)':'var(--danger)'}">
+        <div class="tax-row">
+          <span style="font-weight:700;font-size:15px">${t('after_tax_income')}</span>
+          <strong class="${afterTaxCls}" style="font-size:20px">${hk(cyAfterTax)}</strong>
         </div>
-      </div>`;
-  }
+      </div>
+    </div>`;
 
   const cfY = currentFY();
   const yearOpts = Array.from({ length: cfY - 2025 }, (_, i) => 2026 + i)
     .map(y => `<option value="${y}" ${y == fy ? 'selected' : ''}>${y}</option>`).join('');
+
+  const fySectionTitle = tc
+    ? `物業稅評估（稅務年度 ${fyLabel}：${fy}年4月 – ${fyNext}年3月）`
+    : `Tax Assessment (Fiscal Year ${fyLabel}: Apr ${fy} – Mar ${fyNext})`;
+  const cySectionTitle = tc
+    ? `租金分成（公曆年度 ${fy}：1月–12月）`
+    : `Shares of Rentals (Calendar Year ${fy}: Jan–Dec)`;
 
   $$('view-container').innerHTML = `
     <div class="page-header">
@@ -2327,7 +2337,7 @@ async function renderSummary() {
         <h3 style="color:var(--accent)">${fySectionTitle}</h3>
       </div>
       <div class="section-body" style="padding:16px 20px 20px">
-        ${buildSectionHTML(s, propBreakdown, generalExpenses, propertyExpenses)}
+        ${mode2HTML}
       </div>
     </div>
 
@@ -2336,7 +2346,7 @@ async function renderSummary() {
         <h3 style="color:var(--success)">${cySectionTitle}</h3>
       </div>
       <div class="section-body" style="padding:16px 20px 20px">
-        ${buildSectionHTML(cySummary, cyPropBreakdown, cyGeneralExpenses, cyPropertyExpenses)}
+        ${mode1HTML}
       </div>
     </div>`;
 }
