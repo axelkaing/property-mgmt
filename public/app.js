@@ -1926,13 +1926,18 @@ async function renderExpenses() {
       const slipViewBtn = e.slip_url ? `<button class="btn btn-ghost btn-sm" onclick="viewExpenseSlip(${e.id})">👁 Slip</button>` : '';
       const slipUploadBtn = !isViewer() ? `<label class="btn btn-ghost btn-sm" style="cursor:pointer;margin:0">📎<input type="file" accept=".pdf,.jpg,.jpeg,.png" style="display:none" onchange="uploadExpenseSlip(${e.id}, this)" /></label>` : '';
       const deleteBtn = !isViewer() ? `<button class="btn btn-danger btn-sm" onclick="deleteExpense(${e.id})">✕</button>` : '';
+      let sharedUnits = [];
+      if (e.is_shared) { try { sharedUnits = JSON.parse(e.shared_units || '[]'); } catch {} }
+      const sharedLine = sharedUnits.length
+        ? `<div style="font-size:11px;color:var(--accent);margin-top:2px">🔗 ${sharedUnits.join(', ')}</div>`
+        : (e.is_shared ? `<div style="font-size:11px;color:var(--accent);margin-top:2px">🔗 Shared</div>` : '');
       expRowsArr.push(`
         <tr>
           <td class="col-mob-hide"><strong>${unitDisplay}</strong></td>
           <td class="col-exp-date">${fmtDate(e.expense_date)}</td>
           <td class="col-exp-cat"><span class="badge badge-blue">${catLabel(e.category)}</span></td>
           <td class="td-money col-exp-amt">${hk(e.amount)}</td>
-          <td class="col-mob-hide">${e.description || ''}</td>
+          <td class="col-mob-hide">${e.description || ''}${sharedLine}</td>
           <td class="col-mob-hide" style="white-space:nowrap">${slipUploadBtn}${slipViewBtn}${deleteBtn}</td>
         </tr>`);
       expCardsArr.push(`
@@ -1941,6 +1946,7 @@ async function renderExpenses() {
           <div class="exp-card-row"><span class="exp-card-label">${t('category_col')}</span><span><span class="badge badge-blue">${catLabel(e.category)}</span></span></div>
           <div class="exp-card-row"><span class="exp-card-label">${t('amount_col')}</span><span class="td-money">${hk(e.amount)}</span></div>
           ${e.description ? `<div class="exp-card-row"><span class="exp-card-label">${t('description_col')}</span><span class="text-muted">${e.description}</span></div>` : ''}
+          ${sharedLine ? `<div class="exp-card-row"><span class="exp-card-label">Shared</span><span style="font-size:11px;color:var(--accent)">${sharedUnits.join(', ') || '🔗'}</span></div>` : ''}
           ${(slipUploadBtn || slipViewBtn || deleteBtn) ? `<div class="exp-card-actions">${slipUploadBtn}${slipViewBtn}${deleteBtn}</div>` : ''}
         </div>`);
     });
