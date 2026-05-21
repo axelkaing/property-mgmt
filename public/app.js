@@ -2346,15 +2346,13 @@ async function renderSummary() {
         </div>`;
       }).join('');
 
-    // Months note — always shown
-    const yearStart = `${d.year}-01-01`;
-    const yearEnd   = `${d.year}-12-31`;
-    const start = (d.contract_start && d.contract_start > yearStart) ? d.contract_start : yearStart;
-    const end   = (d.contract_end   && d.contract_end   < yearEnd)   ? d.contract_end   : yearEnd;
-    const sm = parseInt(start.slice(5, 7));
-    const em = parseInt(end.slice(5, 7));
-    const months = d.occupiedMonths > 0 ? d.occupiedMonths : 12;
-    const incomeNote = ` <span style="font-size:11px;opacity:.65">(${MNAMES[sm-1]}–${MNAMES[em-1]}, ${months} months)</span>`;
+    // Months note — based on actual billing months with payments
+    let incomeNote = '';
+    if (d.incomeMonthCount > 0 && d.incomeMonthFirst && d.incomeMonthLast) {
+      const sm = parseInt(d.incomeMonthFirst.slice(5, 7));
+      const em = parseInt(d.incomeMonthLast.slice(5, 7));
+      incomeNote = ` <span style="font-size:11px;opacity:.65">(${MNAMES[sm-1]}–${MNAMES[em-1]}, ${d.incomeMonthCount} months)</span>`;
+    }
 
     const netCls   = d.netIncome     >= 0 ? 'var(--success)' : 'var(--danger)';
     const afterCls = d.afterTaxIncome >= 0 ? 'var(--success)' : 'var(--danger)';

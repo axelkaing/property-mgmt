@@ -1283,7 +1283,8 @@ async function getSummaryUnit(res, url) {
   const fyYear   = parseInt(year);
   const fyDStart = `${fyYear}-04-01`, fyDEnd = `${fyYear + 1}-03-31`;
 
-  // Resolve unit label → room + tenant
+  // Resolve unit label → room + best-matching tenant for this year
+  // Uses correlated subquery so departed tenants (active=0) are found for historical years.
   const roomRow = await DB.prepare(`
     SELECT r.id as room_id, r.room_label, r.property_id,
       p.code as property_code,
@@ -1292,12 +1293,19 @@ async function getSummaryUnit(res, url) {
       (SELECT COUNT(*) FROM rooms r2 WHERE r2.property_id = r.property_id) as prop_unit_count
     FROM rooms r
     JOIN properties p ON p.id = r.property_id
-    LEFT JOIN tenants t ON t.room_id = r.id AND t.active = 1
+    LEFT JOIN tenants t ON t.id = (
+      SELECT id FROM tenants t2
+      WHERE t2.room_id = r.id
+        AND (t2.contract_start IS NULL OR t2.contract_start <= ?)
+        AND (t2.contract_end   IS NULL OR t2.contract_end   >= ?)
+      ORDER BY t2.active DESC, t2.contract_start DESC
+      LIMIT 1
+    )
     WHERE CASE
       WHEN r.room_label IS NULL OR r.room_label = 'Flat' THEN p.code
       WHEN LENGTH(r.room_label) = 1 THEN p.code || '-' || r.room_label
       ELSE p.code || ' ' || r.room_label
-    END = ?`).bind(unit).first();
+    END = ?`).bind(cyDEnd, cyDStart, unit).first();
 
   if (!roomRow) return sendErr(res, 'Unit not found', 404);
 
@@ -1326,9 +1334,12 @@ async function getSummaryUnit(res, url) {
     ugrRow,      pgrRow,      sgrRows,
   ] = await Promise.all([
     tenant_id
-      ? DB.prepare(`SELECT COALESCE(SUM(amount),0) as total FROM payments WHERE tenant_id=? AND billing_month>=? AND billing_month<=?`)
+      ? DB.prepare(`SELECT COALESCE(SUM(amount),0) as total,
+          MIN(billing_month) as first_month, MAX(billing_month) as last_month,
+          COUNT(DISTINCT billing_month) as month_count
+          FROM payments WHERE tenant_id=? AND billing_month>=? AND billing_month<=?`)
           .bind(tenant_id, cyMStart, cyMEnd).first()
-      : Promise.resolve({ total: 0 }),
+      : Promise.resolve({ total: 0, first_month: null, last_month: null, month_count: 0 }),
 
     // (a) unit-specific, excl handling_fee
     DB.prepare(`SELECT category, COALESCE(SUM(amount),0) as total FROM expenses
@@ -1368,23 +1379,30 @@ async function getSummaryUnit(res, url) {
       .bind(fyDStart, fyDEnd).all(),
   ]);
 
+  // Categories that are always unit-specific — never prorated regardless of bucket
+  const UNIT_SPECIFIC_CATS = new Set(['repairs', 'stamp_duty', 'electricity', 'water']);
+
   // Build expense maps
   // (a) unit-specific — actual costs, NOT prorated
   const expUnit = {};
   unitExpRows.results.forEach(r => { expUnit[r.category] = r.total; });
 
-  // (b) property-level share — prorated by occupied months
+  // (b) property-level share — prorated by occupied months (except unit-specific categories)
   const expProp = {};
-  propExpRows.results.forEach(r => { expProp[r.category] = (r.total / N) * occupiedFraction; });
+  propExpRows.results.forEach(r => {
+    const frac = UNIT_SPECIFIC_CATS.has(r.category) ? 1.0 : occupiedFraction;
+    expProp[r.category] = (r.total / N) * frac;
+  });
 
-  // (c) shared general — prorated by occupied months
+  // (c) shared general — prorated by occupied months (except unit-specific categories)
   const expShared = {};
   const expSharedDivisors = {};
   for (const row of sharedExpRows.results) {
     let units = [];
     try { units = JSON.parse(row.shared_units || '[]'); } catch {}
     if (units.includes(unit) && units.length > 0) {
-      expShared[row.category] = (expShared[row.category] || 0) + (row.amount / units.length) * occupiedFraction;
+      const frac = UNIT_SPECIFIC_CATS.has(row.category) ? 1.0 : occupiedFraction;
+      expShared[row.category] = (expShared[row.category] || 0) + (row.amount / units.length) * frac;
       expSharedDivisors[row.category] = units.length;
     }
   }
@@ -1424,6 +1442,9 @@ async function getSummaryUnit(res, url) {
     tenantName: roomRow.tenant_name || null,
     rent: rent || 0,
     income,
+    incomeMonthFirst: incomeRow?.first_month || null,
+    incomeMonthLast:  incomeRow?.last_month  || null,
+    incomeMonthCount: incomeRow?.month_count || 0,
     occupiedMonths, occupiedFraction,
     contract_start: roomRow.contract_start || null,
     contract_end: roomRow.contract_end || null,
