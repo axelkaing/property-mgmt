@@ -421,12 +421,16 @@ function fmtMonth(m) { if (!m) return '–'; const [y, mo] = m.split('-'); retur
 function openMonthPicker(wrap) {
   const inp = wrap.querySelector('input[type=month]');
   if (!inp) return;
-  inp.focus();
-  inp.click();
+  try {
+    inp.showPicker();
+  } catch (e) {
+    inp.focus();
+    inp.dispatchEvent(new MouseEvent('click', { bubbles: false, cancelable: true, view: window }));
+  }
 }
 
 function mkMonthInput(currentMonth, minMo, onChangeFn) {
-  return `<div class="month-input-wrap">
+  return `<div class="month-input-wrap" onclick="openMonthPicker(this)">
     <span class="month-input-icon">📅</span>
     <span class="month-input-label">${fmtMonth(currentMonth)}</span>
     <input type="month" value="${currentMonth}" min="${minMo || '2026-01'}" max="${ym()}"
@@ -2018,7 +2022,6 @@ function showAddExpense() {
     api.get('/api/properties'),
     api.get('/api/tenants'),
   ]).then(([properties, rooms]) => {
-    // Group active rooms by property_id
     const roomsByProp = {};
     rooms.forEach(r => {
       if (!roomsByProp[r.property_id]) roomsByProp[r.property_id] = [];
@@ -2029,7 +2032,6 @@ function showAddExpense() {
     properties.forEach(p => {
       const pRooms = roomsByProp[p.id] || [];
       if (pRooms.length > 1) {
-        // Multi-room property: optgroup with property-level option first
         const roomInner = pRooms.map(r => {
           const ul = fmtUnit(r.property_code, r.room_label);
           return `<option value="${r.property_id}|${ul}">${ul}</option>`;
@@ -2040,6 +2042,26 @@ function showAddExpense() {
         const ul = fmtUnit(r.property_code, r.room_label);
         propOpts += `<option value="${r.property_id}|${ul}">${ul}</option>`;
       }
+    });
+
+    // Build unit checkboxes for the sharing section
+    let selectAllCount = 0;
+    let unitGroupsHtml = '';
+    properties.forEach(p => {
+      const pRooms = roomsByProp[p.id] || [];
+      if (!pRooms.length) return;
+      const excluded = p.code === '4F/SH';
+      const items = pRooms.map(r => {
+        const ul = fmtUnit(r.property_code, r.room_label);
+        if (!excluded) selectAllCount++;
+        return `<label style="display:flex;align-items:center;gap:5px;margin:2px 0;font-weight:normal;cursor:pointer">
+          <input type="checkbox" class="exp-unit${excluded ? '' : ' exp-unit-all'}" value="${ul}"> ${ul}
+        </label>`;
+      }).join('');
+      unitGroupsHtml += `<div style="margin-bottom:10px">
+        <div style="font-weight:600;font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px">${p.code}</div>
+        ${items}
+      </div>`;
     });
 
     openModal(t('add_expense'), `
@@ -2080,12 +2102,60 @@ function showAddExpense() {
             <label>${t('desc_lbl')}</label>
             <input type="text" id="exp-desc" placeholder="Optional" />
           </div>
+          <div id="exp-sharing" class="form-group full" style="display:none">
+            <label>Sharing</label>
+            <div style="display:flex;gap:20px;margin-bottom:10px">
+              <label style="display:flex;align-items:center;gap:6px;font-weight:normal;cursor:pointer">
+                <input type="radio" name="exp-share" value="none" checked> Non-shared
+              </label>
+              <label style="display:flex;align-items:center;gap:6px;font-weight:normal;cursor:pointer">
+                <input type="radio" name="exp-share" value="shared"> Shared among units
+              </label>
+            </div>
+            <div id="exp-units" style="display:none;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 14px">
+              <label style="display:flex;align-items:center;gap:6px;margin-bottom:10px;cursor:pointer;font-weight:600">
+                <input type="checkbox" id="exp-sel-all"> Select all ${selectAllCount} units
+              </label>
+              <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:0 12px">
+                ${unitGroupsHtml}
+              </div>
+            </div>
+          </div>
         </div>
         <div class="modal-actions">
           <button type="button" class="btn btn-ghost" onclick="closeModal()">${t('cancel')}</button>
           <button type="submit" class="btn btn-primary">💾 ${t('save')}</button>
         </div>
       </form>`);
+
+    $$('exp-prop').addEventListener('change', function () {
+      const isGeneral = this.value === '0|General';
+      $$('exp-sharing').style.display = isGeneral ? '' : 'none';
+      if (!isGeneral) {
+        document.querySelector('[name="exp-share"][value="none"]').checked = true;
+        $$('exp-units').style.display = 'none';
+      }
+    });
+
+    document.querySelectorAll('[name="exp-share"]').forEach(radio => {
+      radio.addEventListener('change', function () {
+        $$('exp-units').style.display = this.value === 'shared' ? '' : 'none';
+      });
+    });
+
+    $$('exp-sel-all').addEventListener('change', function () {
+      document.querySelectorAll('.exp-unit-all').forEach(cb => { cb.checked = this.checked; });
+    });
+
+    document.querySelectorAll('.exp-unit-all').forEach(cb => {
+      cb.addEventListener('change', function () {
+        const all = document.querySelectorAll('.exp-unit-all');
+        const checked = document.querySelectorAll('.exp-unit-all:checked');
+        const selAll = $$('exp-sel-all');
+        selAll.indeterminate = checked.length > 0 && checked.length < all.length;
+        selAll.checked = checked.length === all.length;
+      });
+    });
   });
 }
 
@@ -2096,6 +2166,17 @@ async function submitExpense(e) {
   const [propIdStr, ...labelParts] = sel.value.split('|');
   const unitLabel = labelParts.join('|');
   const propId = (propIdStr && propIdStr !== '0') ? parseInt(propIdStr) : null;
+
+  let isShared = false;
+  let sharedUnits = null;
+  if (sel.value === '0|General') {
+    const shareRadio = document.querySelector('[name="exp-share"]:checked');
+    if (shareRadio?.value === 'shared') {
+      isShared = true;
+      sharedUnits = Array.from(document.querySelectorAll('.exp-unit:checked')).map(cb => cb.value);
+    }
+  }
+
   await api.post('/api/expenses', {
     property_id:  propId,
     unit_label:   unitLabel,
@@ -2103,6 +2184,8 @@ async function submitExpense(e) {
     category:     $$('exp-cat').value,
     amount:       parseFloat($$('exp-amount').value),
     description:  $$('exp-desc').value || null,
+    is_shared:    isShared,
+    shared_units: sharedUnits,
   });
   closeModal();
   renderExpenses();

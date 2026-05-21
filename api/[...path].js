@@ -94,6 +94,8 @@ async function ensureSchema() {
     `ALTER TABLE tenants ADD COLUMN contract_url TEXT`,
     `ALTER TABLE expenses ADD COLUMN slip_url TEXT`,
     `ALTER TABLE properties ADD COLUMN sort_order INTEGER DEFAULT 99`,
+    `ALTER TABLE expenses ADD COLUMN is_shared INTEGER DEFAULT 0`,
+    `ALTER TABLE expenses ADD COLUMN shared_units TEXT`,
   ];
   for (const sql of migrations) {
     try { await d1Query(sql); } catch { /* column already exists */ }
@@ -1154,9 +1156,10 @@ async function getExpensesPage(res, url) {
 async function createExpense(req, res) {
   const d = req.body || {};
   const result = await DB.prepare(`
-    INSERT INTO expenses (property_id, expense_date, category, amount, description, unit_label)
-    VALUES (?,?,?,?,?,?)`)
-    .bind(d.property_id || null, d.expense_date, d.category, d.amount, d.description || null, d.unit_label || null)
+    INSERT INTO expenses (property_id, expense_date, category, amount, description, unit_label, is_shared, shared_units)
+    VALUES (?,?,?,?,?,?,?,?)`)
+    .bind(d.property_id || null, d.expense_date, d.category, d.amount, d.description || null, d.unit_label || null,
+          d.is_shared ? 1 : 0, d.shared_units ? JSON.stringify(d.shared_units) : null)
     .run();
   return sendJson(res, { success: true, id: result.meta.last_row_id });
 }
