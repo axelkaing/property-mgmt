@@ -333,6 +333,7 @@ async function route(req, res, path, url) {
   if (path === '/api/expenses-page'          && m === 'GET')    return getExpensesPage(res, url);
   if (path === '/api/expenses'               && m === 'GET')    return getExpenses(res, url);
   if (path === '/api/summary'                && m === 'GET')    return getSummary(res, url);
+  if (path === '/api/summary-unit'           && m === 'GET')    return getSummaryUnit(res, url);
   if (/^\/api\/receipt\/\d+$/.test(path)    && m === 'GET')    return getReceipt(res, seg(path, 3));
   if (/^\/api\/contracts\/\d+\/view$/.test(path)       && m === 'GET') return viewContract(req, res, seg(path, 3));
   if (/^\/api\/expenses\/\d+\/slip\/view$/.test(path)  && m === 'GET') return viewExpenseSlip(req, res, seg(path, 3));
@@ -1269,5 +1270,137 @@ async function getSummary(res, url) {
     fy, fyLabel,
     fyData: { contractRent, govtRates: fyGovtRates, taxBase: fyTaxBase, propertyTax: fyTax },
     cyData: { income: cyIncome, expenses: cyExpCatMap, totalExpenses: cyTotalExp, netIncome: cyNetIncome },
+  });
+}
+
+async function getSummaryUnit(res, url) {
+  const unit = url.searchParams.get('unit');
+  const year = url.searchParams.get('year') || String(new Date().getFullYear());
+  if (!unit) return sendErr(res, 'unit required');
+
+  const cyDStart = `${year}-01-01`, cyDEnd = `${year}-12-31`;
+  const cyMStart = `${year}-01`,    cyMEnd = `${year}-12`;
+  const fyYear   = parseInt(year);
+  const fyDStart = `${fyYear}-04-01`, fyDEnd = `${fyYear + 1}-03-31`;
+
+  // Resolve unit label → room + tenant
+  const roomRow = await DB.prepare(`
+    SELECT r.id as room_id, r.room_label, r.property_id,
+      p.code as property_code,
+      t.id as tenant_id, t.name as tenant_name, t.rent,
+      (SELECT COUNT(*) FROM rooms r2 WHERE r2.property_id = r.property_id) as prop_unit_count
+    FROM rooms r
+    JOIN properties p ON p.id = r.property_id
+    LEFT JOIN tenants t ON t.room_id = r.id AND t.active = 1
+    WHERE CASE
+      WHEN r.room_label IS NULL OR r.room_label = 'Flat' THEN p.code
+      WHEN LENGTH(r.room_label) = 1 THEN p.code || '-' || r.room_label
+      ELSE p.code || ' ' || r.room_label
+    END = ?`).bind(unit).first();
+
+  if (!roomRow) return sendErr(res, 'Unit not found', 404);
+
+  const { room_id, property_id, tenant_id, rent, prop_unit_count, property_code } = roomRow;
+  const N = Math.max(1, prop_unit_count || 1);
+
+  // Run all queries in parallel
+  const [
+    incomeRow,
+    unitExpRows, propExpRows, sharedExpRows, hfRow,
+    ugrRow,      pgrRow,      sgrRows,
+  ] = await Promise.all([
+    tenant_id
+      ? DB.prepare(`SELECT COALESCE(SUM(amount),0) as total FROM payments WHERE tenant_id=? AND billing_month>=? AND billing_month<=?`)
+          .bind(tenant_id, cyMStart, cyMEnd).first()
+      : Promise.resolve({ total: 0 }),
+
+    // (a) unit-specific, excl handling_fee
+    DB.prepare(`SELECT category, COALESCE(SUM(amount),0) as total FROM expenses
+      WHERE unit_label=? AND expense_date>=? AND expense_date<=? AND category!='handling_fee'
+      GROUP BY category`).bind(unit, cyDStart, cyDEnd).all(),
+
+    // (b) property-level (unit_label = property code), excl handling_fee
+    DB.prepare(`SELECT category, COALESCE(SUM(amount),0) as total FROM expenses
+      WHERE property_id=? AND unit_label=? AND is_shared=0
+        AND expense_date>=? AND expense_date<=? AND category!='handling_fee'
+      GROUP BY category`).bind(property_id, property_code, cyDStart, cyDEnd).all(),
+
+    // (c) shared general, excl handling_fee — fetch rows so we can check shared_units JSON
+    DB.prepare(`SELECT category, amount, shared_units FROM expenses
+      WHERE is_shared=1 AND expense_date>=? AND expense_date<=? AND category!='handling_fee'`)
+      .bind(cyDStart, cyDEnd).all(),
+
+    // (d) total handling_fee / 13
+    DB.prepare(`SELECT COALESCE(SUM(amount),0) as total FROM expenses
+      WHERE category='handling_fee' AND expense_date>=? AND expense_date<=?`)
+      .bind(cyDStart, cyDEnd).first(),
+
+    // govt_rates: unit-specific (FY)
+    DB.prepare(`SELECT COALESCE(SUM(amount),0) as total FROM expenses
+      WHERE unit_label=? AND category='govt_rates' AND expense_date>=? AND expense_date<=?`)
+      .bind(unit, fyDStart, fyDEnd).first(),
+
+    // govt_rates: property-level (FY)
+    DB.prepare(`SELECT COALESCE(SUM(amount),0) as total FROM expenses
+      WHERE property_id=? AND unit_label=? AND category='govt_rates' AND is_shared=0
+        AND expense_date>=? AND expense_date<=?`)
+      .bind(property_id, property_code, fyDStart, fyDEnd).first(),
+
+    // govt_rates: shared general (FY)
+    DB.prepare(`SELECT amount, shared_units FROM expenses
+      WHERE category='govt_rates' AND is_shared=1 AND expense_date>=? AND expense_date<=?`)
+      .bind(fyDStart, fyDEnd).all(),
+  ]);
+
+  // Build expense maps
+  const expUnit = {};
+  unitExpRows.results.forEach(r => { expUnit[r.category] = r.total; });
+
+  const expProp = {};
+  propExpRows.results.forEach(r => { expProp[r.category] = r.total / N; });
+
+  const expShared = {};
+  for (const row of sharedExpRows.results) {
+    let units = [];
+    try { units = JSON.parse(row.shared_units || '[]'); } catch {}
+    if (units.includes(unit) && units.length > 0)
+      expShared[row.category] = (expShared[row.category] || 0) + row.amount / units.length;
+  }
+
+  const handlingFee = (hfRow?.total || 0) / 13;
+
+  // Aggregate into one map
+  const expTotal = {};
+  const merge = src => Object.entries(src).forEach(([k, v]) => { expTotal[k] = (expTotal[k] || 0) + v; });
+  merge(expUnit); merge(expProp); merge(expShared);
+  if (handlingFee > 0) expTotal['handling_fee'] = (expTotal['handling_fee'] || 0) + handlingFee;
+
+  const totalExpenses = Object.values(expTotal).reduce((s, v) => s + v, 0);
+  const income        = incomeRow?.total || 0;
+  const netIncome     = income - totalExpenses;
+
+  // Tax (FY: Apr year – Mar year+1)
+  const contractRent = (rent || 0) * 12;
+
+  let sharedGovtRates = 0;
+  for (const row of sgrRows.results) {
+    let units = [];
+    try { units = JSON.parse(row.shared_units || '[]'); } catch {}
+    if (units.includes(unit) && units.length > 0) sharedGovtRates += row.amount / units.length;
+  }
+  const govtRates = (ugrRow?.total || 0) + (pgrRow?.total || 0) / N + sharedGovtRates;
+  const taxBase       = Math.max(0, contractRent - govtRates);
+  const tax           = taxBase * 0.8 * 0.15;
+  const afterTaxIncome = netIncome - tax;
+
+  return sendJson(res, {
+    unit, year,
+    tenantName: roomRow.tenant_name || null,
+    rent: rent || 0,
+    income,
+    expUnit, expProp, expShared, handlingFee,
+    expTotal, totalExpenses,
+    netIncome,
+    contractRent, govtRates, taxBase, tax, afterTaxIncome,
   });
 }

@@ -2054,7 +2054,7 @@ function showAddExpense() {
       const items = pRooms.map(r => {
         const ul = fmtUnit(r.property_code, r.room_label);
         if (!excluded) selectAllCount++;
-        return `<label style="display:flex;align-items:center;gap:5px;margin:2px 0;font-weight:normal;cursor:pointer">
+        return `<label style="display:flex;align-items:center;gap:5px;margin:2px 0;font-weight:normal;cursor:pointer;white-space:nowrap">
           <input type="checkbox" class="exp-unit${excluded ? '' : ' exp-unit-all'}" value="${ul}"> ${ul}
         </label>`;
       }).join('');
@@ -2266,7 +2266,11 @@ async function viewPaymentProof(payId) {
 
 async function renderSummary() {
   const fy = S.data.globalFY !== undefined ? String(S.data.globalFY) : String(currentFY());
-  const data = await api.get(`/api/summary?fy=${fy}`);
+  const [data, properties, tenants] = await Promise.all([
+    api.get(`/api/summary?fy=${fy}`),
+    api.get('/api/properties'),
+    api.get('/api/tenants'),
+  ]);
   const { fyLabel, fyData, cyData } = data;
   const fyNext = String(parseInt(fy) + 1);
   const tc = S.lang === 'tc';
@@ -2371,6 +2375,17 @@ async function renderSummary() {
       </div>
     </div>`;
 
+  // Build deduplicated unit list in property order for per-unit breakdown
+  const seenUnits = new Set();
+  const unitList  = [];
+  properties.forEach(p => {
+    tenants.filter(t => t.property_id === p.id).forEach(t => {
+      const ul = fmtUnit(t.property_code, t.room_label);
+      if (!seenUnits.has(ul)) { seenUnits.add(ul); unitList.push(ul); }
+    });
+  });
+  window._summaryCtx = { fy, unitList };
+
   const cfY = currentFY();
   const yearOpts = Array.from({ length: cfY - 2025 }, (_, i) => 2026 + i)
     .map(y => `<option value="${y}" ${y == fy ? 'selected' : ''}>${y}</option>`).join('');
@@ -2381,6 +2396,9 @@ async function renderSummary() {
   const cySectionTitle = tc
     ? `租金分成（公曆年度 ${fy}：1月–12月）`
     : `Shares of Rentals (Calendar Year ${fy}: Jan–Dec)`;
+  const unitSectionTitle = tc
+    ? `每單位分析（公曆年度 ${fy}）`
+    : `Per-Unit Breakdown (Calendar Year ${fy})`;
 
   $$('view-container').innerHTML = `
     <div class="page-header">
@@ -2399,14 +2417,131 @@ async function renderSummary() {
       </div>
     </div>
 
-    <div class="section" style="border-left:4px solid var(--success)">
+    <div class="section mb-16" style="border-left:4px solid var(--success)">
       <div class="section-header">
         <h3 style="color:var(--success)">${cySectionTitle}</h3>
       </div>
       <div class="section-body" style="padding:16px 20px 20px">
         ${mode1HTML}
       </div>
+    </div>
+
+    <div class="section" style="border-left:4px solid #94a3b8">
+      <div class="section-header" style="cursor:pointer" onclick="loadUnitBreakdown()">
+        <h3 style="color:#64748b">${unitSectionTitle}</h3>
+        <button id="unit-breakdown-btn" class="btn btn-ghost" style="font-size:13px" onclick="event.stopPropagation();loadUnitBreakdown()">Load ▾</button>
+      </div>
+      <div id="unit-breakdown-container" style="display:none"></div>
     </div>`;
+}
+
+async function loadUnitBreakdown() {
+  const ctx = window._summaryCtx;
+  if (!ctx) return;
+  const container = $$('unit-breakdown-container');
+  const btn       = $$('unit-breakdown-btn');
+  if (!container) return;
+
+  if (container.dataset.loaded) {
+    const hidden = container.style.display === 'none';
+    container.style.display = hidden ? '' : 'none';
+    if (btn) btn.textContent = hidden ? 'Hide ▲' : 'Load ▾';
+    return;
+  }
+
+  container.style.display = '';
+  container.innerHTML = `<div style="padding:20px;color:var(--muted);text-align:center;font-size:13px">Loading…</div>`;
+  if (btn) btn.textContent = 'Loading…';
+
+  const { fy, unitList } = ctx;
+  const results = await Promise.allSettled(
+    unitList.map(u => api.get(`/api/summary-unit?unit=${encodeURIComponent(u)}&year=${fy}`))
+  );
+
+  let totIncome = 0, totExp = 0, totNet = 0, totTax = 0, totAfter = 0;
+
+  const rows = results.map((r, i) => {
+    const unit = unitList[i];
+    if (r.status === 'rejected') {
+      return `<tr><td colspan="7" style="color:var(--danger);padding:8px 10px;font-size:13px">${unit} — failed to load</td></tr>`;
+    }
+    const d = r.value;
+    totIncome += d.income;
+    totExp    += d.totalExpenses;
+    totNet    += d.netIncome;
+    totTax    += d.tax;
+    totAfter  += d.afterTaxIncome;
+
+    const netCls   = d.netIncome     >= 0 ? 'color:var(--success)' : 'color:var(--danger)';
+    const afterCls = d.afterTaxIncome >= 0 ? 'color:var(--success)' : 'color:var(--danger)';
+    const detailId = `ubr-${i}`;
+
+    const expSumUnit   = Object.values(d.expUnit   || {}).reduce((s, v) => s + v, 0);
+    const expSumProp   = Object.values(d.expProp   || {}).reduce((s, v) => s + v, 0);
+    const expSumShared = Object.values(d.expShared || {}).reduce((s, v) => s + v, 0);
+
+    const detailParts = [
+      expSumUnit   > 0.005 ? `<div class="tax-row" style="font-size:11px"><span style="color:var(--muted)">Unit-specific</span><span>${hk(expSumUnit)}</span></div>` : '',
+      expSumProp   > 0.005 ? `<div class="tax-row" style="font-size:11px"><span style="color:var(--muted)">Property share</span><span>${hk(expSumProp)}</span></div>` : '',
+      expSumShared > 0.005 ? `<div class="tax-row" style="font-size:11px"><span style="color:var(--muted)">Shared (÷n)</span><span>${hk(expSumShared)}</span></div>` : '',
+      d.handlingFee > 0.005 ? `<div class="tax-row" style="font-size:11px"><span style="color:var(--muted)">Handling fee (÷13)</span><span>${hk(d.handlingFee)}</span></div>` : '',
+    ].filter(Boolean).join('');
+
+    return `
+      <tr style="border-bottom:1px solid var(--border);cursor:pointer" onclick="document.getElementById('${detailId}').classList.toggle('hidden')">
+        <td style="padding:8px 10px;font-weight:600;white-space:nowrap">${unit}</td>
+        <td style="padding:8px 10px;color:var(--muted);font-size:12px;white-space:nowrap">${d.tenantName || '—'}</td>
+        <td style="padding:8px 10px;text-align:right;color:var(--success)">${hk(d.income)}</td>
+        <td style="padding:8px 10px;text-align:right;color:var(--danger)">${hk(d.totalExpenses)}</td>
+        <td style="padding:8px 10px;text-align:right;${netCls}">${hk(d.netIncome)}</td>
+        <td style="padding:8px 10px;text-align:right">${hk(d.tax)}</td>
+        <td style="padding:8px 10px;text-align:right;${afterCls};font-weight:600">${hk(d.afterTaxIncome)}</td>
+      </tr>
+      <tr id="${detailId}" class="hidden" style="background:#f8fafc">
+        <td colspan="2" style="padding:4px 10px 10px 24px;font-size:11px;color:var(--muted)">
+          Rent: ${hk(d.rent)}/mo · Gov't rates: ${hk(d.govtRates)}
+        </td>
+        <td></td>
+        <td colspan="4" style="padding:4px 10px 10px">
+          ${detailParts || '<span style="font-size:11px;color:var(--muted)">No expenses</span>'}
+        </td>
+      </tr>`;
+  }).join('');
+
+  const totNetCls   = totNet   >= 0 ? 'color:var(--success)' : 'color:var(--danger)';
+  const totAfterCls = totAfter >= 0 ? 'color:var(--success)' : 'color:var(--danger)';
+
+  container.innerHTML = `
+    <div style="overflow-x:auto;padding:0 20px 20px">
+      <p style="font-size:11px;color:var(--muted);margin:12px 0 8px">Click a row to expand expense sources.</p>
+      <table style="width:100%;border-collapse:collapse;font-size:13px">
+        <thead>
+          <tr style="background:#f1f5f9;text-align:right">
+            <th style="text-align:left;padding:7px 10px;font-size:11px;font-weight:700;text-transform:uppercase;color:var(--muted);white-space:nowrap">Unit</th>
+            <th style="text-align:left;padding:7px 10px;font-size:11px;font-weight:700;text-transform:uppercase;color:var(--muted)">Tenant</th>
+            <th style="padding:7px 10px;font-size:11px;font-weight:700;text-transform:uppercase;color:var(--muted)">Income</th>
+            <th style="padding:7px 10px;font-size:11px;font-weight:700;text-transform:uppercase;color:var(--muted)">Expenses</th>
+            <th style="padding:7px 10px;font-size:11px;font-weight:700;text-transform:uppercase;color:var(--muted)">Net Income</th>
+            <th style="padding:7px 10px;font-size:11px;font-weight:700;text-transform:uppercase;color:var(--muted)">Tax</th>
+            <th style="padding:7px 10px;font-size:11px;font-weight:700;text-transform:uppercase;color:var(--muted)">After-Tax</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+        <tfoot>
+          <tr style="border-top:2px solid var(--border);font-weight:700;background:#f8fafc;text-align:right">
+            <td colspan="2" style="padding:8px 10px;text-align:left;font-size:13px">Total</td>
+            <td style="padding:8px 10px;color:var(--success)">${hk(totIncome)}</td>
+            <td style="padding:8px 10px;color:var(--danger)">${hk(totExp)}</td>
+            <td style="padding:8px 10px;${totNetCls}">${hk(totNet)}</td>
+            <td style="padding:8px 10px">${hk(totTax)}</td>
+            <td style="padding:8px 10px;${totAfterCls}">${hk(totAfter)}</td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>`;
+
+  container.dataset.loaded = '1';
+  if (btn) btn.textContent = 'Hide ▲';
 }
 
 // ── Modal ────────────────────────────────────────────────────────────────────
@@ -2506,6 +2641,7 @@ window.showAddPayment     = showAddPayment;
 window.showAddExpense     = showAddExpense;
 window.submitPayment      = submitPayment;
 window.submitExpense      = submitExpense;
+window.loadUnitBreakdown  = loadUnitBreakdown;
 window.saveBillingUnit    = saveBillingUnit;
 window.calcBilling        = calcBilling;
 window.changeBillingMonth = changeBillingMonth;
