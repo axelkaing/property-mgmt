@@ -1332,6 +1332,7 @@ async function getSummaryUnit(res, url) {
     incomeRow,
     unitExpRows, propExpRows, sharedExpRows, hfRow,
     ugrRow,      pgrRow,      sgrRows,
+    propOccupancyRows,
   ] = await Promise.all([
     tenant_id
       ? DB.prepare(`SELECT COALESCE(SUM(amount),0) as total,
@@ -1346,11 +1347,11 @@ async function getSummaryUnit(res, url) {
       WHERE unit_label=? AND expense_date>=? AND expense_date<=? AND category!='handling_fee'
       GROUP BY category`).bind(unit, cyDStart, cyDEnd).all(),
 
-    // (b) property-level (unit_label = property code), excl handling_fee
-    DB.prepare(`SELECT category, COALESCE(SUM(amount),0) as total FROM expenses
+    // (b) property-level (unit_label = property code), excl handling_fee — individual rows for dynamic divisor
+    DB.prepare(`SELECT category, amount, expense_date FROM expenses
       WHERE property_id=? AND unit_label=? AND is_shared=0
-        AND expense_date>=? AND expense_date<=? AND category!='handling_fee'
-      GROUP BY category`).bind(property_id, property_code, cyDStart, cyDEnd).all(),
+        AND expense_date>=? AND expense_date<=? AND category!='handling_fee'`)
+      .bind(property_id, property_code, cyDStart, cyDEnd).all(),
 
     // (c) shared general, excl handling_fee — fetch rows so we can check shared_units JSON
     DB.prepare(`SELECT category, amount, shared_units FROM expenses
@@ -1377,22 +1378,62 @@ async function getSummaryUnit(res, url) {
     DB.prepare(`SELECT amount, shared_units FROM expenses
       WHERE category='govt_rates' AND is_shared=1 AND expense_date>=? AND expense_date<=?`)
       .bind(fyDStart, fyDEnd).all(),
+
+    // Property occupancy: each room with its best-matching tenant for this year
+    DB.prepare(`
+      SELECT r.id as room_id, t.contract_start, t.contract_end
+      FROM rooms r
+      LEFT JOIN tenants t ON t.id = (
+        SELECT id FROM tenants t2
+        WHERE t2.room_id = r.id
+          AND (t2.contract_start IS NULL OR t2.contract_start <= ?)
+          AND (t2.contract_end   IS NULL OR t2.contract_end   >= ?)
+        ORDER BY t2.active DESC, t2.contract_start DESC
+        LIMIT 1
+      )
+      WHERE r.property_id = ?`)
+      .bind(cyDEnd, cyDStart, property_id).all(),
   ]);
 
-  // Categories that are always unit-specific — never prorated regardless of bucket
+  // Categories that are always unit-specific — never divided by property occupancy
   const UNIT_SPECIFIC_CATS = new Set(['repairs', 'stamp_duty', 'electricity', 'water']);
 
+  // Build per-month occupied-unit count for this property (YYYY-MM → count)
+  const monthOccupancy = {};
+  for (let m = 1; m <= 12; m++) {
+    const monthStr = `${year}-${String(m).padStart(2, '0')}`;
+    let count = 0;
+    for (const row of propOccupancyRows.results) {
+      if (!row.contract_start) continue;
+      const cs = row.contract_start.slice(0, 7);
+      const ce = row.contract_end ? row.contract_end.slice(0, 7) : '9999-12';
+      if (cs <= monthStr && ce >= monthStr) count++;
+    }
+    monthOccupancy[monthStr] = count;
+  }
+
+  // Current unit's effective tenancy span as YYYY-MM strings
+  const unitMonthStart = ((roomRow.contract_start && roomRow.contract_start > cyDStart)
+    ? roomRow.contract_start : cyDStart).slice(0, 7);
+  const unitMonthEnd = (roomRow.contract_end && roomRow.contract_end < cyDEnd
+    ? roomRow.contract_end : cyDEnd).slice(0, 7);
+
   // Build expense maps
-  // (a) unit-specific — actual costs, NOT prorated
+  // (a) unit-specific — actual costs, NOT divided or prorated
   const expUnit = {};
   unitExpRows.results.forEach(r => { expUnit[r.category] = r.total; });
 
-  // (b) property-level share — prorated by occupied months (except unit-specific categories)
+  // (b) property-level share — dynamic divisor per expense month (occupied units that month)
+  // Unit-specific categories (repairs, stamp_duty, electricity, water) are excluded from this bucket
+  // since they would only appear here if mistakenly entered at property level.
   const expProp = {};
-  propExpRows.results.forEach(r => {
-    const frac = UNIT_SPECIFIC_CATS.has(r.category) ? 1.0 : occupiedFraction;
-    expProp[r.category] = (r.total / N) * frac;
-  });
+  for (const r of propExpRows.results) {
+    if (UNIT_SPECIFIC_CATS.has(r.category)) continue;
+    const monthStr = r.expense_date.slice(0, 7);
+    if (monthStr < unitMonthStart || monthStr > unitMonthEnd) continue;
+    const divisor = Math.max(1, monthOccupancy[monthStr] || 1);
+    expProp[r.category] = (expProp[r.category] || 0) + r.amount / divisor;
+  }
 
   // (c) shared general — prorated by occupied months (except unit-specific categories)
   const expShared = {};
