@@ -1288,6 +1288,7 @@ async function getSummaryUnit(res, url) {
     SELECT r.id as room_id, r.room_label, r.property_id,
       p.code as property_code,
       t.id as tenant_id, t.name as tenant_name, t.rent,
+      t.contract_start, t.contract_end,
       (SELECT COUNT(*) FROM rooms r2 WHERE r2.property_id = r.property_id) as prop_unit_count
     FROM rooms r
     JOIN properties p ON p.id = r.property_id
@@ -1302,6 +1303,21 @@ async function getSummaryUnit(res, url) {
 
   const { room_id, property_id, tenant_id, rent, prop_unit_count, property_code } = roomRow;
   const N = Math.max(1, prop_unit_count || 1);
+
+  // Proration: if tenant left before year-end, scale shared/overhead expenses
+  // Unit-specific expenses (repairs, stamp duty) are actual costs — not prorated.
+  const yearEnd = `${year}-12-31`;
+  let occupiedMonths = 12;
+  let occupiedFraction = 1.0;
+  if (roomRow.contract_end && roomRow.contract_end < yearEnd) {
+    const yearStart      = `${year}-01-01`;
+    const effectiveStart = (roomRow.contract_start && roomRow.contract_start > yearStart)
+      ? roomRow.contract_start : yearStart;
+    const [sy, sm] = effectiveStart.slice(0, 7).split('-').map(Number);
+    const [ey, em] = roomRow.contract_end.slice(0, 7).split('-').map(Number);
+    occupiedMonths   = Math.max(0, (ey * 12 + em) - (sy * 12 + sm) + 1);
+    occupiedFraction = Math.min(1, occupiedMonths / 12);
+  }
 
   // Run all queries in parallel
   const [
@@ -1353,21 +1369,28 @@ async function getSummaryUnit(res, url) {
   ]);
 
   // Build expense maps
+  // (a) unit-specific — actual costs, NOT prorated
   const expUnit = {};
   unitExpRows.results.forEach(r => { expUnit[r.category] = r.total; });
 
+  // (b) property-level share — prorated by occupied months
   const expProp = {};
-  propExpRows.results.forEach(r => { expProp[r.category] = r.total / N; });
+  propExpRows.results.forEach(r => { expProp[r.category] = (r.total / N) * occupiedFraction; });
 
+  // (c) shared general — prorated by occupied months
   const expShared = {};
+  const expSharedDivisors = {};
   for (const row of sharedExpRows.results) {
     let units = [];
     try { units = JSON.parse(row.shared_units || '[]'); } catch {}
-    if (units.includes(unit) && units.length > 0)
-      expShared[row.category] = (expShared[row.category] || 0) + row.amount / units.length;
+    if (units.includes(unit) && units.length > 0) {
+      expShared[row.category] = (expShared[row.category] || 0) + (row.amount / units.length) * occupiedFraction;
+      expSharedDivisors[row.category] = units.length;
+    }
   }
 
-  const handlingFee = (hfRow?.total || 0) / 13;
+  // (d) handling fee — prorated by occupied months
+  const handlingFee = ((hfRow?.total || 0) / 13) * occupiedFraction;
 
   // Aggregate into one map
   const expTotal = {};
@@ -1388,7 +1411,10 @@ async function getSummaryUnit(res, url) {
     try { units = JSON.parse(row.shared_units || '[]'); } catch {}
     if (units.includes(unit) && units.length > 0) sharedGovtRates += row.amount / units.length;
   }
-  const govtRates = (ugrRow?.total || 0) + (pgrRow?.total || 0) / N + sharedGovtRates;
+  // Unit-specific govt_rates: not prorated (actual cost); property/shared: prorated
+  const govtRates = (ugrRow?.total || 0)
+    + ((pgrRow?.total || 0) / N) * occupiedFraction
+    + sharedGovtRates * occupiedFraction;
   const taxBase       = Math.max(0, contractRent - govtRates);
   const tax           = taxBase * 0.8 * 0.15;
   const afterTaxIncome = netIncome - tax;
@@ -1398,7 +1424,11 @@ async function getSummaryUnit(res, url) {
     tenantName: roomRow.tenant_name || null,
     rent: rent || 0,
     income,
-    expUnit, expProp, expShared, handlingFee,
+    occupiedMonths, occupiedFraction,
+    contract_start: roomRow.contract_start || null,
+    contract_end: roomRow.contract_end || null,
+    propUnitCount: N,
+    expUnit, expProp, expShared, expSharedDivisors, handlingFee,
     expTotal, totalExpenses,
     netIncome,
     contractRent, govtRates, taxBase, tax, afterTaxIncome,

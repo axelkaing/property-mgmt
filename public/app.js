@@ -2312,54 +2312,89 @@ async function renderSummary() {
   };
   const catOrder = ['govt_rent','govt_rates','repairs','insurance','stamp_duty','handling_fee','electricity','water','garbage','other'];
 
+  const GREEN = '#16a34a';
+  const BLUE  = '#2563eb';
+
+  // FY date range label, e.g. "1/4/26–31/3/27"
+  const fyS = `1/4/${fy.slice(2)}`;
+  const fyE = `31/3/${String(parseInt(fy) + 1).slice(2)}`;
+  const MNAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
   function mkUnitCard(unit, d, color) {
     if (!d) return `
-      <div style="border:1.5px solid var(--border);border-radius:var(--radius);padding:16px 20px;margin-bottom:12px;color:var(--danger);font-size:13px">
+      <div style="border:1.5px solid var(--border);border-radius:var(--radius);padding:16px 18px;color:var(--danger);font-size:13px">
         ${unit} — failed to load
       </div>`;
 
+    // Divisor suffix per expense category
+    const divisorLabel = {};
+    catOrder.forEach(k => {
+      if (k === 'handling_fee') { divisorLabel[k] = '÷13'; return; }
+      if ((d.expShared[k] || 0) > 0.005 && d.expSharedDivisors && d.expSharedDivisors[k])
+        divisorLabel[k] = `÷${d.expSharedDivisors[k]}`;
+      else if ((d.expProp[k] || 0) > 0.005)
+        divisorLabel[k] = `÷${d.propUnitCount}`;
+    });
+
     const expRows = catOrder
       .filter(k => (d.expTotal[k] || 0) > 0.005)
-      .map(k => `<div class="tax-row" style="font-size:13px">
-          <span style="color:var(--muted)">${catLabels[k]}</span>
+      .map(k => {
+        const dv = divisorLabel[k] ? ` <span style="font-size:11px;opacity:.6">(${divisorLabel[k]})</span>` : '';
+        return `<div class="tax-row" style="font-size:13px">
+          <span style="color:var(--muted)">${catLabels[k]}${dv}</span>
           <span>− ${hk(d.expTotal[k])}</span>
-        </div>`).join('');
+        </div>`;
+      }).join('');
+
+    // Months note — always shown
+    const yearStart = `${d.year}-01-01`;
+    const yearEnd   = `${d.year}-12-31`;
+    const start = (d.contract_start && d.contract_start > yearStart) ? d.contract_start : yearStart;
+    const end   = (d.contract_end   && d.contract_end   < yearEnd)   ? d.contract_end   : yearEnd;
+    const sm = parseInt(start.slice(5, 7));
+    const em = parseInt(end.slice(5, 7));
+    const months = d.occupiedMonths > 0 ? d.occupiedMonths : 12;
+    const incomeNote = ` <span style="font-size:11px;opacity:.65">(${MNAMES[sm-1]}–${MNAMES[em-1]}, ${months} months)</span>`;
 
     const netCls   = d.netIncome     >= 0 ? 'var(--success)' : 'var(--danger)';
     const afterCls = d.afterTaxIncome >= 0 ? 'var(--success)' : 'var(--danger)';
 
     return `
-      <div style="background:#fff;border:1.5px solid ${color}40;border-left:4px solid ${color};border-radius:var(--radius);padding:18px 20px;margin-bottom:12px">
-        <div style="display:flex;justify-content:space-between;align-items:baseline;padding-bottom:10px;margin-bottom:12px;border-bottom:1px solid var(--border)">
-          <strong style="font-size:16px;color:${color}">${unit}</strong>
-          <span style="color:var(--muted);font-size:13px">${d.tenantName || '—'}</span>
+      <div style="background:#fff;border:1px solid ${color}30;border-top:3px solid ${color};border-radius:var(--radius);padding:16px 18px;display:flex;flex-direction:column">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;padding-bottom:10px;margin-bottom:10px;border-bottom:1px solid var(--border)">
+          <strong style="font-size:18px;color:${color};letter-spacing:-.3px;flex-shrink:0">${unit}</strong>
+          <span style="font-size:10px;font-weight:600;color:${color};background:${color}12;border:1px solid ${color}30;border-radius:4px;padding:2px 7px;white-space:nowrap;margin-top:3px">Calendar Year ${fy}: Jan–Dec</span>
         </div>
-        <div class="tax-row">
-          <span>${tc ? '年度合約租金' : 'Contract Rent (annual)'}</span>
-          <strong>${hk(d.contractRent)}</strong>
+        <div style="font-size:13px;color:var(--muted);margin-bottom:12px">${tc ? '租客' : 'Tenant'}: <strong style="color:var(--text)">${d.tenantName || '—'}</strong></div>
+        <div class="tax-row" style="font-size:14px">
+          <span>${tc ? '合約租金' : 'Contract Rent'}</span>
+          <span><span style="font-size:11px;opacity:.6">${hk(d.rent)} × 12 = </span><strong>${hk(d.contractRent)}</strong></span>
         </div>
-        <div class="tax-row">
-          <span>${tc ? '收租收入' : 'Rental Income'}</span>
+        <div class="tax-row" style="font-size:14px;margin-top:4px">
+          <span>${tc ? '收租收入' : 'Rental Income'}${incomeNote}</span>
           <strong style="color:var(--success)">${hk(d.income)}</strong>
         </div>
-        <div style="margin-top:10px">
-          <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">${tc ? '支出' : 'Expenses'}</div>
+        <div style="margin-top:12px;padding-top:10px;border-top:1px dashed var(--border)">
+          <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">${tc ? '支出' : 'Expenses'}</div>
           ${expRows || `<div style="font-size:12px;color:var(--muted)">—</div>`}
-          <div class="tax-row" style="font-weight:600;border-top:1px solid var(--border);margin-top:6px;padding-top:6px">
+          <div class="tax-row" style="font-weight:600;font-size:13px;border-top:1px solid var(--border);margin-top:6px;padding-top:6px">
             <span>${tc ? '支出合計' : 'Total Expenses'}</span>
             <span style="color:var(--danger)">− ${hk(d.totalExpenses)}</span>
           </div>
         </div>
-        <div style="border-top:2px solid var(--border);margin-top:14px;padding-top:12px">
+        <div style="border-top:2px solid var(--border);margin-top:12px;padding-top:12px">
           <div class="tax-row">
             <span style="font-weight:700">${tc ? '淨收入' : 'Net Income'}</span>
             <strong style="color:${netCls}">${hk(d.netIncome)}</strong>
           </div>
-          <div class="tax-row" style="font-size:13px">
-            <span style="color:var(--muted)">${tc ? '估計物業稅（稅務年度）' : 'Est. Property Tax (FY)'}</span>
-            <span style="color:var(--danger)">− ${hk(d.tax)}</span>
+          <div style="margin-top:8px;padding:8px 10px;background:#f8fafc;border:1px solid var(--border);border-radius:6px;font-size:12px">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+              <span style="color:var(--muted)">${tc ? '估計物業稅' : 'Est. Property Tax'} <span style="opacity:.65">(FY, ${fyS}–${fyE})</span></span>
+              <span style="color:var(--danger);font-weight:600;white-space:nowrap">− ${hk(d.tax)}</span>
+            </div>
+            <div style="margin-top:3px;color:var(--muted);font-size:11px;opacity:.8">(${hk(d.contractRent)} − ${hk(d.govtRates)} rates) × 80% × 15% = ${hk(d.tax)}</div>
           </div>
-          <div class="tax-row" style="margin-top:6px">
+          <div class="tax-row" style="margin-top:12px">
             <span style="font-weight:700;font-size:15px">${tc ? '稅後收入' : 'After-Tax Income'}</span>
             <strong style="color:${afterCls};font-size:20px">${hk(d.afterTaxIncome)}</strong>
           </div>
@@ -2393,34 +2428,34 @@ async function renderSummary() {
     const afterCls = totAfter >= 0 ? 'var(--success)' : 'var(--danger)';
 
     return `
-      <div style="background:#f8fafc;border:2px solid ${color};border-radius:var(--radius);padding:18px 20px;margin-top:4px">
-        <div style="font-size:12px;font-weight:700;color:${color};text-transform:uppercase;letter-spacing:.6px;margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid var(--border)">${label}</div>
+      <div style="background:#f0fdf4;border:2px solid ${color};border-radius:var(--radius);padding:18px 20px">
+        <div style="font-size:12px;font-weight:700;color:${color};text-transform:uppercase;letter-spacing:.6px;margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid ${color}30">${label}</div>
         <div class="tax-row">
-          <span>${tc ? '年度合約租金合計' : 'Total Contract Rent (annual)'}</span>
+          <span>${tc ? '合約租金合計' : 'Total Contract Rent (annual)'}</span>
           <strong>${hk(totCR)}</strong>
         </div>
-        <div class="tax-row">
+        <div class="tax-row" style="margin-top:4px">
           <span>${tc ? '收租收入合計' : 'Total Rental Income'}</span>
           <strong style="color:var(--success)">${hk(totInc)}</strong>
         </div>
-        <div style="margin-top:10px">
-          <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">${tc ? '支出合計' : 'Total Expenses'}</div>
+        <div style="margin-top:12px;padding-top:10px;border-top:1px dashed ${color}40">
+          <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">${tc ? '支出合計' : 'Total Expenses'}</div>
           ${expRows || `<div style="font-size:12px;color:var(--muted)">—</div>`}
-          <div class="tax-row" style="font-weight:600;border-top:1px solid var(--border);margin-top:6px;padding-top:6px">
+          <div class="tax-row" style="font-weight:600;font-size:13px;border-top:1px solid ${color}30;margin-top:6px;padding-top:6px">
             <span>${tc ? '支出合計' : 'Total Expenses'}</span>
             <span style="color:var(--danger)">− ${hk(totExp)}</span>
           </div>
         </div>
-        <div style="border-top:3px solid ${color};margin-top:14px;padding-top:12px">
+        <div style="border-top:2px solid ${color};margin-top:14px;padding-top:12px">
           <div class="tax-row">
             <span style="font-weight:700">${tc ? '淨收入' : 'Net Income'}</span>
             <strong style="color:${netCls}">${hk(totNet)}</strong>
           </div>
-          <div class="tax-row" style="font-size:13px">
-            <span style="color:var(--muted)">${tc ? '估計物業稅合計' : 'Est. Property Tax (FY)'}</span>
+          <div class="tax-row" style="font-size:13px;margin-top:4px">
+            <span style="color:var(--muted)">${tc ? '估計物業稅合計' : 'Est. Property Tax (FY)'} <span style="opacity:.65">(FY, ${fyS}–${fyE})</span></span>
             <span style="color:var(--danger)">− ${hk(totTax)}</span>
           </div>
-          <div class="tax-row" style="margin-top:6px">
+          <div class="tax-row" style="margin-top:10px">
             <span style="font-weight:700;font-size:15px">${tc ? '稅後收入' : 'After-Tax Income'}</span>
             <strong style="color:${afterCls};font-size:22px">${hk(totAfter)}</strong>
           </div>
@@ -2428,17 +2463,22 @@ async function renderSummary() {
       </div>`;
   }
 
-  const GREEN = '#16a34a';
-  const BLUE  = '#2563eb';
-
   $$('view-container').innerHTML = pageHeader + `
+    <style>
+      .summary-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:16px; }
+      @media (max-width:1100px) { .summary-grid { grid-template-columns:repeat(2,1fr); } }
+      @media (max-width:640px)  { .summary-grid { grid-template-columns:1fr; } }
+      .summary-grid-full { grid-column:1/-1; }
+    </style>
     <div class="section mb-16" style="border-left:4px solid ${GREEN}">
       <div class="section-header">
         <h3 style="color:${GREEN}">${tc ? '共享物業（2F/WS + 3F/KC）' : 'Shared Properties (2F/WS + 3F/KC)'} — ${fy}</h3>
       </div>
       <div class="section-body" style="padding:16px 20px 20px">
-        ${SHARED_UNITS.map(u => mkUnitCard(u, dataMap[u], GREEN)).join('')}
-        ${mkSubtotalCard(SHARED_UNITS, GREEN, tc ? '共享物業小計' : 'Shared Properties — Subtotal')}
+        <div class="summary-grid">
+          ${SHARED_UNITS.map(u => mkUnitCard(u, dataMap[u], GREEN)).join('')}
+          <div class="summary-grid-full">${mkSubtotalCard(SHARED_UNITS, GREEN, tc ? '共享物業小計' : 'Shared Properties — Subtotal')}</div>
+        </div>
       </div>
     </div>
 
@@ -2447,7 +2487,9 @@ async function renderSummary() {
         <h3 style="color:${BLUE}">${tc ? '個別物業' : 'Individual Properties'} — ${fy}</h3>
       </div>
       <div class="section-body" style="padding:16px 20px 20px">
-        ${INDIV_UNITS.map(u => mkUnitCard(u, dataMap[u], BLUE)).join('')}
+        <div class="summary-grid">
+          ${INDIV_UNITS.map(u => mkUnitCard(u, dataMap[u], BLUE)).join('')}
+        </div>
       </div>
     </div>`;
 }
