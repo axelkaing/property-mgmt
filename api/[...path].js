@@ -1335,6 +1335,15 @@ async function getSummaryUnit(res, url) {
     propOccupied[ms] = getPropCount(ms);
   }
 
+  // Fallback: if there's an active tenant but no months are detected as occupied,
+  // the contract_start was likely entered incorrectly or predates the system.
+  // Departed tenants (active=0) always have reliable contract_end dates, so no fallback for them.
+  const hasActiveTenant = roomTenants.some(t => t.active === 1);
+  const anyOccupied     = Object.values(unitOccupied).some(Boolean);
+  if (hasActiveTenant && !anyOccupied) {
+    for (const ms of Object.keys(unitOccupied)) unitOccupied[ms] = true;
+  }
+
   // Primary tenant for display + income (best overlap with this calendar year)
   const primaryTenant = roomTenants.find(t => {
     const cs = t.contract_start ? t.contract_start.slice(0, 7) : '0000-01';
@@ -1342,8 +1351,8 @@ async function getSummaryUnit(res, url) {
     return cs <= cyMEnd && ce >= cyMStart;
   }) || roomTenants[0] || null;
 
-  const tenant_id     = primaryTenant?.tenant_id ?? null;
-  const rent          = primaryTenant?.rent || 0;
+  const tenant_id      = primaryTenant?.tenant_id ?? null;
+  const rent           = primaryTenant?.rent || 0;
   const occupiedMonths = Object.values(unitOccupied).filter(Boolean).length;
 
   // Fetch all expense + income data in parallel
