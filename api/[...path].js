@@ -1302,7 +1302,7 @@ async function getSummaryUnit(res, url) {
   const [roomTenantsRes, propTenantsRes] = await Promise.all([
     DB.prepare(`SELECT id as tenant_id, name, rent, contract_start, contract_end, active
       FROM tenants WHERE room_id=? ORDER BY active DESC, id DESC`).bind(room_id).all(),
-    DB.prepare(`SELECT r.id as room_id, t.contract_start, t.contract_end
+    DB.prepare(`SELECT r.id as room_id, t.id as tenant_id, t.contract_start, t.contract_end
       FROM rooms r LEFT JOIN tenants t ON t.room_id = r.id
       WHERE r.property_id=?`).bind(property_id).all(),
   ]);
@@ -1312,10 +1312,12 @@ async function getSummaryUnit(res, url) {
   const propUnitCount = new Set(propTenants.map(t => t.room_id)).size;
 
   // Does a tenant's contract cover the given YYYY-MM?
+  // tenant_id null means a vacant room row from the LEFT JOIN — not occupied.
+  // null contract_start means tenant predates our records; treat as occupied from the beginning.
   function coversMonth(t, ms) {
-    if (!t.contract_start) return false;
-    const cs = t.contract_start.slice(0, 7);
-    const ce = t.contract_end ? t.contract_end.slice(0, 7) : '9999-12';
+    if (t.tenant_id == null) return false;
+    const cs = t.contract_start ? t.contract_start.slice(0, 7) : '0000-01';
+    const ce = t.contract_end   ? t.contract_end.slice(0, 7)   : '9999-12';
     return cs <= ms && ce >= ms;
   }
   function isUnitOccupied(ms) { return roomTenants.some(t => coversMonth(t, ms)); }
@@ -1402,12 +1404,18 @@ async function getSummaryUnit(res, url) {
   }
 
   // Rule 2: property-level — ÷occupied count that month, skip if unit not occupied
-  const expProp = {};
+  const expProp = {}, expPropDivSets = {};
   for (const r of propExpRows.results) {
     const ms = r.expense_date.slice(0, 7);
     if (!(unitOccupied[ms] ?? isUnitOccupied(ms))) continue;
-    const cnt = propOccupied[ms] ?? getPropCount(ms);
-    expProp[r.category] = (expProp[r.category] || 0) + r.amount / Math.max(1, cnt);
+    const cnt = Math.max(1, propOccupied[ms] ?? getPropCount(ms));
+    expProp[r.category] = (expProp[r.category] || 0) + r.amount / cnt;
+    if (!expPropDivSets[r.category]) expPropDivSets[r.category] = new Set();
+    expPropDivSets[r.category].add(cnt);
+  }
+  const expPropDivisors = {};
+  for (const [k, s] of Object.entries(expPropDivSets)) {
+    expPropDivisors[k] = [...s].sort((a, b) => a - b);
   }
 
   // Rule 3: unit-specific — 100% assigned
@@ -1462,7 +1470,7 @@ async function getSummaryUnit(res, url) {
     contract_start: primaryTenant?.contract_start || null,
     contract_end:   primaryTenant?.contract_end   || null,
     propUnitCount,
-    expUnit, expProp, expShared, expSharedDivisors, handlingFee,
+    expUnit, expProp, expPropDivisors, expShared, expSharedDivisors, handlingFee,
     expTotal, totalExpenses,
     netIncome,
     contractRent, govtRates, taxBase, tax, afterTaxIncome,

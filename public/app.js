@@ -440,7 +440,7 @@ function mkMonthInput(currentMonth, minMo, onChangeFn) {
 
 function changeDashMonth(m) { S.data.dashMonth = m; renderDashboard(); }
 function changePayMonth(m) { S.data.payMonth = m; renderPayments(); }
-function changeExpMonth(m) { S.data.expMonth = m; S.data.expUnit = ''; S.data.expCat = ''; renderExpenses(); }
+function changeExpMonth(m) { S.data.expMonth = m; S.data.expAllMonths = false; S.data.expUnit = ''; S.data.expCat = ''; renderExpenses(); }
 function ym(d = new Date()) { return d.toISOString().slice(0, 7); }
 function today() { return new Date().toISOString().slice(0, 10); }
 function fyLabel(fy) { return `${fy}/${String(parseInt(fy) + 1).slice(-2)}`; }
@@ -1846,11 +1846,12 @@ function expUnitLabel(e) {
 
 async function renderExpenses() {
   if (S.data.expMonth === undefined) S.data.expMonth = ym();
-  const expMonth = S.data.expMonth;
-  const expUnit  = S.data.expUnit  || '';
-  const expCat   = S.data.expCat   || '';
+  const expMonth    = S.data.expMonth;
+  const expUnit     = S.data.expUnit     || '';
+  const expCat      = S.data.expCat      || '';
+  const expAllMonths = S.data.expAllMonths || false;
 
-  const params = new URLSearchParams({ month: expMonth });
+  const params = expAllMonths ? new URLSearchParams() : new URLSearchParams({ month: expMonth });
 
   const { expenses, properties, allTimeTotal: allTimeExpTotal } =
     await api.get(`/api/expenses-page?${params}`);
@@ -1975,7 +1976,13 @@ async function renderExpenses() {
     <div class="section mb-16">
       <div class="section-header">
         <h3>${t('filter_month')}</h3>
-        ${mkMonthInput(expMonth, '2026-01', 'changeExpMonth')}
+        <div style="display:flex;align-items:center;gap:8px">
+          <div style="${expAllMonths ? 'opacity:.35' : ''}">
+            ${mkMonthInput(expMonth, '2026-01', 'changeExpMonth')}
+          </div>
+          <button class="btn ${expAllMonths ? 'btn-primary' : 'btn-ghost'}" style="white-space:nowrap;font-size:13px"
+            onclick="S.data.expAllMonths=!S.data.expAllMonths;renderExpenses()">All Months</button>
+        </div>
       </div>
     </div>
 
@@ -2330,10 +2337,16 @@ async function renderSummary() {
     const divisorLabel = {};
     catOrder.forEach(k => {
       if (k === 'handling_fee') { divisorLabel[k] = '÷13'; return; }
-      if ((d.expShared[k] || 0) > 0.005 && d.expSharedDivisors?.[k] > 1)
+      if ((d.expShared[k] || 0) > 0.005 && d.expSharedDivisors?.[k] > 1) {
         divisorLabel[k] = `÷${d.expSharedDivisors[k]}`;
-      else if ((d.expProp[k] || 0) > 0.005 && d.propUnitCount > 1)
-        divisorLabel[k] = `÷${d.propUnitCount}`;
+      } else if ((d.expProp[k] || 0) > 0.005) {
+        const divs = d.expPropDivisors?.[k];
+        if (divs && divs.length > 0 && divs[divs.length - 1] > 1) {
+          divisorLabel[k] = divs.length === 1
+            ? `÷${divs[0]}`
+            : `÷${divs[0]}–${divs[divs.length - 1]}`;
+        }
+      }
     });
 
     const expRows = catOrder
@@ -2475,7 +2488,7 @@ async function renderSummary() {
       <div class="section-body" style="padding:16px 20px 20px">
         <div class="summary-grid">
           ${SHARED_UNITS.map(u => mkUnitCard(u, dataMap[u], GREEN)).join('')}
-          <div class="summary-grid-full">${mkSubtotalCard(SHARED_UNITS, GREEN, tc ? '共享物業小計' : 'Shared Properties — Subtotal')}</div>
+          <div class="summary-grid-full">${mkSubtotalCard(SHARED_UNITS, GREEN, tc ? '2F/WS + 3F/KC 合計' : '2F/WS + 3F/KC Combined')}</div>
         </div>
       </div>
     </div>
