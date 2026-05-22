@@ -2330,9 +2330,9 @@ async function renderSummary() {
     const divisorLabel = {};
     catOrder.forEach(k => {
       if (k === 'handling_fee') { divisorLabel[k] = '÷13'; return; }
-      if ((d.expShared[k] || 0) > 0.005 && d.expSharedDivisors && d.expSharedDivisors[k])
+      if ((d.expShared[k] || 0) > 0.005 && d.expSharedDivisors?.[k] > 1)
         divisorLabel[k] = `÷${d.expSharedDivisors[k]}`;
-      else if ((d.expProp[k] || 0) > 0.005)
+      else if ((d.expProp[k] || 0) > 0.005 && d.propUnitCount > 1)
         divisorLabel[k] = `÷${d.propUnitCount}`;
     });
 
