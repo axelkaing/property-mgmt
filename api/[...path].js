@@ -1403,12 +1403,20 @@ async function getSummaryUnit(res, url) {
       .bind(property_id, fyDStart, fyDEnd).all(),
   ]);
 
-  // Rule 1: handling_fee — ÷13, exclude 4F/SH, only if unit occupied that month
+  // Rule 1: handling_fee — ÷13, exclude 4F/SH
+  // Active tenants: full share of the annual pool (owner pays the annual fee regardless of
+  // when the tenant moved in — expense recording timing should not reduce the allocation).
+  // Departed tenants (active=0): per-month proration using the expense date.
   let handlingFee = 0;
   if (!is4FSH) {
-    for (const r of handlingFeeRows.results) {
-      const ms = r.expense_date.slice(0, 7);
-      if (unitOccupied[ms] ?? isUnitOccupied(ms)) handlingFee += r.amount / 13;
+    const hfTotal = handlingFeeRows.results.reduce((s, r) => s + r.amount, 0);
+    if (hasActiveTenant) {
+      handlingFee = hfTotal / 13;
+    } else {
+      for (const r of handlingFeeRows.results) {
+        const ms = r.expense_date.slice(0, 7);
+        if (unitOccupied[ms] ?? isUnitOccupied(ms)) handlingFee += r.amount / 13;
+      }
     }
   }
 
