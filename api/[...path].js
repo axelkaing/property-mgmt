@@ -1379,9 +1379,11 @@ async function getSummaryUnit(res, url) {
         AND expense_date>=? AND expense_date<=? GROUP BY category`)
       .bind(unit, cyDStart, cyDEnd).all(),
 
-    // Rule 4: general shared (no property, is_shared=1)
+    // Rule 4: general shared (no property, is_shared=1) — exclude categories handled by Rules 1 & 2
     DB.prepare(`SELECT category, amount, shared_units FROM expenses
-      WHERE property_id IS NULL AND is_shared=1 AND expense_date>=? AND expense_date<=?`)
+      WHERE property_id IS NULL AND is_shared=1
+        AND category NOT IN ('handling_fee','govt_rent','govt_rates')
+        AND expense_date>=? AND expense_date<=?`)
       .bind(cyDStart, cyDEnd).all(),
 
     // FY govt_rates for tax basis (Apr year – Mar year+1)
@@ -1418,8 +1420,8 @@ async function getSummaryUnit(res, url) {
     let units = [];
     try { units = JSON.parse(r.shared_units || '[]'); } catch {}
     if (units.length > 0 && units.includes(unit)) {
-      expShared[r.category]         = (expShared[r.category] || 0) + r.amount / units.length;
-      expSharedDivisors[r.category] = units.length;
+      expShared[r.category] = (expShared[r.category] || 0) + r.amount / units.length;
+      if (units.length > 1) expSharedDivisors[r.category] = units.length;
     }
   }
 
