@@ -334,6 +334,7 @@ async function route(req, res, path, url) {
   if (path === '/api/expenses'               && m === 'GET')    return getExpenses(res, url);
   if (path === '/api/summary'                && m === 'GET')    return getSummary(res, url);
   if (path === '/api/summary-unit'           && m === 'GET')    return getSummaryUnit(res, url);
+  if (path === '/api/summary-all'            && m === 'GET')    return getSummaryAll(res, url);
   if (/^\/api\/receipt\/\d+$/.test(path)    && m === 'GET')    return getReceipt(res, seg(path, 3));
   if (/^\/api\/contracts\/\d+\/view$/.test(path)       && m === 'GET') return viewContract(req, res, seg(path, 3));
   if (/^\/api\/expenses\/\d+\/slip\/view$/.test(path)  && m === 'GET') return viewExpenseSlip(req, res, seg(path, 3));
@@ -1491,5 +1492,60 @@ async function getSummaryUnit(res, url) {
     expTotal, totalExpenses,
     netIncome,
     contractRent, govtRates, taxBase, tax, afterTaxIncome,
+  });
+}
+
+async function getSummaryAll(res, url) {
+  const year   = url.searchParams.get('year') || String(new Date().getFullYear());
+  const fyYear = parseInt(year);
+
+  const cyDStart = `${year}-01-01`,    cyDEnd = `${year}-12-31`;
+  const cyMStart = `${year}-01`,       cyMEnd = `${year}-12`;
+  const fyDStart = `${fyYear}-04-01`,  fyDEnd = `${fyYear + 1}-03-31`;
+
+  const [roomsRes, tenantsRes, paymentsRes, expensesRes, fyGovtRatesRes] = await Promise.all([
+    DB.prepare(`
+      SELECT r.id as room_id, r.room_label, r.property_id, r.status,
+        p.code as property_code, p.sort_order
+      FROM rooms r
+      JOIN properties p ON p.id = r.property_id
+      ORDER BY p.sort_order, p.id, r.room_label`).all(),
+
+    DB.prepare(`
+      SELECT t.id as tenant_id, t.room_id, t.name, t.rent,
+        t.contract_start, t.contract_end, t.active
+      FROM tenants t
+      WHERE t.active = 1
+        OR (t.active = 0 AND (t.contract_end IS NULL OR t.contract_end >= ?))`
+    ).bind(cyDStart).all(),
+
+    DB.prepare(`
+      SELECT p.tenant_id, p.billing_month, p.amount, p.payment_date
+      FROM payments p
+      WHERE p.billing_month >= ? AND p.billing_month <= ?`
+    ).bind(cyMStart, cyMEnd).all(),
+
+    DB.prepare(`
+      SELECT e.id, e.property_id, e.expense_date, e.category, e.amount,
+        e.unit_label, e.is_shared, e.shared_units
+      FROM expenses e
+      WHERE e.expense_date >= ? AND e.expense_date <= ?`
+    ).bind(cyDStart, cyDEnd).all(),
+
+    DB.prepare(`
+      SELECT e.property_id, e.expense_date, e.amount
+      FROM expenses e
+      WHERE e.category = 'govt_rates'
+        AND e.expense_date >= ? AND e.expense_date <= ?`
+    ).bind(fyDStart, fyDEnd).all(),
+  ]);
+
+  return sendJson(res, {
+    year,
+    rooms:       roomsRes.results,
+    tenants:     tenantsRes.results,
+    payments:    paymentsRes.results,
+    expenses:    expensesRes.results,
+    fyGovtRates: fyGovtRatesRes.results,
   });
 }

@@ -2277,6 +2277,179 @@ async function viewPaymentProof(payId) {
 
 // ── Annual Summary ───────────────────────────────────────────────────────────
 
+function computeUnitData(unit, year, raw) {
+  const { rooms, tenants, payments, expenses, fyGovtRates } = raw;
+
+  const cyDStart = `${year}-01-01`, cyDEnd = `${year}-12-31`;
+  const cyMStart = `${year}-01`,    cyMEnd = `${year}-12`;
+  const fyYear   = parseInt(year);
+  const fyDStart = `${fyYear}-04-01`, fyDEnd = `${fyYear + 1}-03-31`;
+
+  // Resolve unit label → room row
+  const roomRow = rooms.find(r => {
+    const lbl  = r.room_label;
+    const code = r.property_code;
+    if (!lbl || lbl === 'Flat') return code === unit;
+    if (/^[A-Z]$/.test(lbl)) return `${code}-${lbl}` === unit;
+    return `${code} ${lbl}` === unit;
+  });
+  if (!roomRow) return null;
+
+  const { room_id, property_id, property_code } = roomRow;
+  const is4FSH = property_code === '4F/SH';
+
+  const roomTenants = tenants.filter(t => t.room_id === room_id);
+  const propRooms   = rooms.filter(r => r.property_id === property_id);
+
+  // Reconstruct left-join propTenants (each room appears, even if no tenant)
+  const propTenantsList = [];
+  for (const room of propRooms) {
+    const rt = tenants.filter(t => t.room_id === room.room_id);
+    if (rt.length === 0) {
+      propTenantsList.push({ room_id: room.room_id, tenant_id: null, contract_start: null, contract_end: null });
+    } else {
+      for (const t of rt) propTenantsList.push({ room_id: room.room_id, tenant_id: t.tenant_id, contract_start: t.contract_start, contract_end: t.contract_end });
+    }
+  }
+
+  const propUnitCount = propRooms.length;
+
+  function coversMonth(t, ms) {
+    if (t.tenant_id == null) return false;
+    const cs = t.contract_start ? t.contract_start.slice(0, 7) : '0000-01';
+    const ce = t.contract_end   ? t.contract_end.slice(0, 7)   : '9999-12';
+    return cs <= ms && ce >= ms;
+  }
+  function isUnitOccupied(ms) { return roomTenants.some(t => coversMonth(t, ms)); }
+  function getPropCount(ms) {
+    const s = new Set();
+    for (const t of propTenantsList) if (coversMonth(t, ms)) s.add(t.room_id);
+    return s.size;
+  }
+
+  const unitOccupied = {}, propOccupied = {};
+  for (let m = 1; m <= 12; m++) {
+    const ms = `${year}-${String(m).padStart(2, '0')}`;
+    unitOccupied[ms] = isUnitOccupied(ms);
+    propOccupied[ms] = getPropCount(ms);
+  }
+
+  const hasActiveTenant = roomTenants.some(t => t.active === 1);
+  const anyOccupied     = Object.values(unitOccupied).some(Boolean);
+  if (hasActiveTenant && !anyOccupied) {
+    for (const ms of Object.keys(unitOccupied)) unitOccupied[ms] = true;
+  }
+
+  const primaryTenant = roomTenants.find(t => {
+    const cs = t.contract_start ? t.contract_start.slice(0, 7) : '0000-01';
+    const ce = t.contract_end   ? t.contract_end.slice(0, 7)   : '9999-12';
+    return cs <= cyMEnd && ce >= cyMStart;
+  }) || roomTenants[0] || null;
+
+  const tenant_id      = primaryTenant?.tenant_id ?? null;
+  const rent           = primaryTenant?.rent || 0;
+  const occupiedMonths = Object.values(unitOccupied).filter(Boolean).length;
+
+  // Income
+  const tenantPays = tenant_id
+    ? payments.filter(p => p.tenant_id === tenant_id && p.billing_month >= cyMStart && p.billing_month <= cyMEnd)
+    : [];
+  const income = tenantPays.reduce((s, p) => s + p.amount, 0);
+  const payMonths = [...new Set(tenantPays.map(p => p.billing_month).filter(Boolean))].sort();
+  const incomeMonthFirst = payMonths[0] || null;
+  const incomeMonthLast  = payMonths[payMonths.length - 1] || null;
+  const incomeMonthCount = payMonths.length;
+
+  // Rule 1: handling_fee — ÷13, exclude 4F/SH
+  const hfRows = expenses.filter(e => e.category === 'handling_fee');
+  let handlingFee = 0;
+  if (!is4FSH) {
+    const hfTotal = hfRows.reduce((s, r) => s + r.amount, 0);
+    if (hasActiveTenant) {
+      handlingFee = hfTotal / 13;
+    } else {
+      for (const r of hfRows) {
+        const ms = r.expense_date.slice(0, 7);
+        if (unitOccupied[ms] ?? isUnitOccupied(ms)) handlingFee += r.amount / 13;
+      }
+    }
+  }
+
+  // Rule 2: property-level categories — ÷occupied count that month
+  const propExpCats = new Set(['govt_rent','govt_rates','insurance','garbage','electricity','water']);
+  const propExpRows = expenses.filter(e => e.property_id === property_id && propExpCats.has(e.category));
+  const expProp = {}, expPropDivSets = {};
+  for (const r of propExpRows) {
+    const ms = r.expense_date.slice(0, 7);
+    if (!(unitOccupied[ms] ?? isUnitOccupied(ms))) continue;
+    const cnt = Math.max(1, propOccupied[ms] ?? getPropCount(ms));
+    expProp[r.category] = (expProp[r.category] || 0) + r.amount / cnt;
+    if (!expPropDivSets[r.category]) expPropDivSets[r.category] = new Set();
+    expPropDivSets[r.category].add(cnt);
+  }
+  const expPropDivisors = {};
+  for (const [k, s] of Object.entries(expPropDivSets)) expPropDivisors[k] = [...s].sort((a, b) => a - b);
+
+  // Rule 3: unit-specific categories — 100% assigned
+  const unitExpCats = new Set(['repairs','stamp_duty','other']);
+  const expUnit = {};
+  for (const r of expenses.filter(e => e.unit_label === unit && unitExpCats.has(e.category))) {
+    expUnit[r.category] = (expUnit[r.category] || 0) + r.amount;
+  }
+
+  // Rule 4: general shared (no property, is_shared=1)
+  const expShared = {}, expSharedDivisors = {};
+  const sharedExclude = new Set(['handling_fee','govt_rent','govt_rates']);
+  for (const r of expenses.filter(e => e.property_id == null && e.is_shared === 1 && !sharedExclude.has(e.category))) {
+    let units = [];
+    try { units = JSON.parse(r.shared_units || '[]'); } catch {}
+    if (units.length > 0 && units.includes(unit)) {
+      expShared[r.category] = (expShared[r.category] || 0) + r.amount / units.length;
+      if (units.length > 1) expSharedDivisors[r.category] = units.length;
+    }
+  }
+
+  // FY govt_rates for property tax
+  let govtRates = 0;
+  for (const r of fyGovtRates.filter(e => e.property_id === property_id)) {
+    const ms = r.expense_date.slice(0, 7);
+    if (!(unitOccupied[ms] ?? isUnitOccupied(ms))) continue;
+    const cnt = propOccupied[ms] ?? getPropCount(ms);
+    govtRates += r.amount / Math.max(1, cnt);
+  }
+
+  const expTotal = {};
+  const merge = obj => { for (const [k, v] of Object.entries(obj)) expTotal[k] = (expTotal[k] || 0) + v; };
+  merge(expUnit); merge(expProp); merge(expShared);
+  if (handlingFee > 0) expTotal.handling_fee = (expTotal.handling_fee || 0) + handlingFee;
+
+  const totalExpenses  = Object.values(expTotal).reduce((s, v) => s + v, 0);
+  const netIncome      = income - totalExpenses;
+  const contractRent   = rent * 12;
+  const taxBase        = Math.max(0, contractRent - govtRates);
+  const tax            = taxBase * 0.8 * 0.15;
+  const afterTaxIncome = netIncome - tax;
+
+  return {
+    unit, year,
+    tenantName: primaryTenant?.name || null,
+    rent,
+    income,
+    incomeMonthFirst,
+    incomeMonthLast,
+    incomeMonthCount,
+    occupiedMonths,
+    occupiedFraction: occupiedMonths / 12,
+    contract_start: primaryTenant?.contract_start || null,
+    contract_end:   primaryTenant?.contract_end   || null,
+    propUnitCount,
+    expUnit, expProp, expPropDivisors, expShared, expSharedDivisors, handlingFee,
+    expTotal, totalExpenses,
+    netIncome,
+    contractRent, govtRates, taxBase, tax, afterTaxIncome,
+  };
+}
+
 async function renderSummary() {
   const fy  = S.data.globalFY !== undefined ? String(S.data.globalFY) : String(currentFY());
   const tc  = S.lang === 'tc';
@@ -2299,11 +2472,9 @@ async function renderSummary() {
   const INDIV_UNITS  = ['4F/KS-A', '4F/KS-B', '4F/KS-C', '4F/KS-D', '4F/KS-E', '4F/SH', '5F/SH', 'CarP P99'];
   const ALL_UNITS    = [...SHARED_UNITS, ...INDIV_UNITS];
 
-  const results = await Promise.allSettled(
-    ALL_UNITS.map(u => api.get(`/api/summary-unit?unit=${encodeURIComponent(u)}&year=${fy}`))
-  );
+  const raw = await api.get(`/api/summary-all?year=${fy}`);
   const dataMap = {};
-  ALL_UNITS.forEach((u, i) => { dataMap[u] = results[i].status === 'fulfilled' ? results[i].value : null; });
+  ALL_UNITS.forEach(u => { dataMap[u] = computeUnitData(u, fy, raw); });
 
   const catLabels = {
     govt_rent:    t('less_govt_rent'),
@@ -2524,18 +2695,15 @@ async function loadUnitBreakdown() {
   if (btn) btn.textContent = 'Loading…';
 
   const { fy, unitList } = ctx;
-  const results = await Promise.allSettled(
-    unitList.map(u => api.get(`/api/summary-unit?unit=${encodeURIComponent(u)}&year=${fy}`))
-  );
+  const raw = await api.get(`/api/summary-all?year=${fy}`);
 
   let totIncome = 0, totRent = 0, totExp = 0, totNet = 0, totTax = 0, totAfter = 0;
 
-  const rows = results.map((r, i) => {
-    const unit = unitList[i];
-    if (r.status === 'rejected') {
+  const rows = unitList.map((unit, i) => {
+    const d = computeUnitData(unit, fy, raw);
+    if (!d) {
       return `<tr><td colspan="8" style="color:var(--danger);padding:8px 10px;font-size:13px">${unit} — failed to load</td></tr>`;
     }
-    const d = r.value;
     totIncome += d.income;
     totRent   += d.contractRent;
     totExp    += d.totalExpenses;
