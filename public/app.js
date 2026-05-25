@@ -2306,9 +2306,9 @@ function computeUnitData(unit, year, raw) {
   for (const room of propRooms) {
     const rt = tenants.filter(t => t.room_id === room.room_id);
     if (rt.length === 0) {
-      propTenantsList.push({ room_id: room.room_id, tenant_id: null, contract_start: null, contract_end: null });
+      propTenantsList.push({ room_id: room.room_id, tenant_id: null, contract_start: null, contract_end: null, active: 0 });
     } else {
-      for (const t of rt) propTenantsList.push({ room_id: room.room_id, tenant_id: t.tenant_id, contract_start: t.contract_start, contract_end: t.contract_end });
+      for (const t of rt) propTenantsList.push({ room_id: room.room_id, tenant_id: t.tenant_id, contract_start: t.contract_start, contract_end: t.contract_end, active: t.active });
     }
   }
 
@@ -2323,7 +2323,7 @@ function computeUnitData(unit, year, raw) {
   function isUnitOccupied(ms) { return roomTenants.some(t => coversMonth(t, ms)); }
   function getPropCount(ms) {
     const s = new Set();
-    for (const t of propTenantsList) if (coversMonth(t, ms)) s.add(t.room_id);
+    for (const t of propTenantsList) if (coversMonth(t, ms) || t.active === 1) s.add(t.room_id);
     return s.size;
   }
 
@@ -2381,7 +2381,7 @@ function computeUnitData(unit, year, raw) {
   const expProp = {}, expPropDivSets = {};
   for (const r of propExpRows) {
     const ms = r.expense_date.slice(0, 7);
-    if (!(unitOccupied[ms] ?? isUnitOccupied(ms))) continue;
+    if (!(unitOccupied[ms] ?? isUnitOccupied(ms)) && !hasActiveTenant) continue;
     const cnt = Math.max(1, propOccupied[ms] ?? getPropCount(ms));
     expProp[r.category] = (expProp[r.category] || 0) + r.amount / cnt;
     if (!expPropDivSets[r.category]) expPropDivSets[r.category] = new Set();
@@ -2640,6 +2640,10 @@ async function renderSummary() {
           <div class="tax-row" style="margin-top:10px">
             <span style="font-weight:700;font-size:15px">${tc ? '稅後收入' : 'After-Tax Income'}</span>
             <strong style="color:${afterCls};font-size:22px">${hk(totAfter)}</strong>
+          </div>
+          <div class="tax-row" style="margin-top:6px">
+            <span style="color:var(--muted);font-size:13px">${tc ? '每位業主（÷3）' : 'Per Owner (÷3)'}</span>
+            <span style="color:${afterCls};font-size:13px;font-weight:600">${hk(totAfter / 3)}</span>
           </div>
         </div>
       </div>`;
