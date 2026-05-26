@@ -2409,7 +2409,7 @@ function computeUnitData(unit, year, raw) {
     }
   }
 
-  // FY govt_rates for property tax
+  // CY govt_rates for property tax (calendar year Jan–Dec)
   let govtRates = 0;
   for (const r of fyGovtRates.filter(e => e.property_id === property_id)) {
     const ms = r.expense_date.slice(0, 7);
