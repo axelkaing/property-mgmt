@@ -2413,7 +2413,7 @@ function computeUnitData(unit, year, raw) {
   let govtRates = 0;
   for (const r of fyGovtRates.filter(e => e.property_id === property_id)) {
     const ms = r.expense_date.slice(0, 7);
-    if (!(unitOccupied[ms] ?? isUnitOccupied(ms))) continue;
+    if (!(unitOccupied[ms] ?? isUnitOccupied(ms)) && !hasActiveTenant) continue;
     const cnt = propOccupied[ms] ?? getPropCount(ms);
     govtRates += r.amount / Math.max(1, cnt);
   }

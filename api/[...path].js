@@ -1451,11 +1451,11 @@ async function getSummaryUnit(res, url) {
     }
   }
 
-  // FY govt_rates for tax: same per-month occupancy logic, may span into next CY
+  // CY govt_rates for tax basis
   let govtRates = 0;
   for (const r of fyGovtRateRows.results) {
     const ms = r.expense_date.slice(0, 7);
-    if (!(unitOccupied[ms] ?? isUnitOccupied(ms))) continue;
+    if (!(unitOccupied[ms] ?? isUnitOccupied(ms)) && !hasActiveTenant) continue;
     const cnt = propOccupied[ms] ?? getPropCount(ms);
     govtRates += r.amount / Math.max(1, cnt);
   }
