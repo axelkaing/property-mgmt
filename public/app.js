@@ -1046,10 +1046,10 @@ async function renderBilling() {
           <button class="btn btn-ghost btn-sm" onclick="printInvoice(${t_.room_id})">
             🖨 ${t('print_invoice')}
           </button>
-          ${!isViewer() ? `<button id="sr-btn-${t_.room_id}" class="btn btn-ghost btn-sm" style="opacity:0.75" onclick="saveReading(${t_.room_id})">
+          <button id="sr-btn-${t_.room_id}" class="btn btn-ghost btn-sm" onclick="saveReading(${t_.room_id})">
             💾 ${t('save_reading')}
           </button>
-          <span id="sr-msg-${t_.room_id}" style="font-size:12px;color:var(--success)"></span>` : ''}
+          <span id="sr-msg-${t_.room_id}" style="font-size:12px;color:var(--success)"></span>
           <span id="bc-msg-${t_.room_id}" style="font-size:12px;color:var(--success)"></span>
         </div>
       </div>`;
