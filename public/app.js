@@ -1044,6 +1044,10 @@ async function renderBilling() {
           <button class="btn btn-ghost btn-sm" onclick="printInvoice(${t_.room_id})">
             🖨 ${t('print_invoice')}
           </button>
+          ${!isViewer() ? `<button id="sr-btn-${t_.room_id}" class="btn btn-ghost btn-sm" style="opacity:0.75" onclick="saveReading(${t_.room_id})">
+            💾 Save Reading
+          </button>
+          <span id="sr-msg-${t_.room_id}" style="font-size:12px;color:var(--success)"></span>` : ''}
           <span id="bc-msg-${t_.room_id}" style="font-size:12px;color:var(--success)"></span>
         </div>
       </div>`;
@@ -1124,6 +1128,34 @@ async function saveBillingUnit(roomId, elecRate, waterType, waterRate, commissio
     S.data._savedMsg = `✓ ${t('saved_ok')} — ${t('total_lbl')}: ${hk(res.total_bill)}`;
     await renderBilling();
   } catch (e) { alert(e.message); }
+}
+
+async function saveReading(roomId) {
+  const month = S.data.billingMonth || ym();
+  const payload = {
+    room_id: roomId,
+    billing_month: month,
+    reading_date: $$(`rd-${roomId}`)?.value || today(),
+    elec_prev:  parseFloat($$(`ep-${roomId}`)?.value) || 0,
+    elec_curr:  parseFloat($$(`ec-${roomId}`)?.value) || 0,
+    water_prev: parseFloat($$(`wp-${roomId}`)?.value) || 0,
+    water_curr: parseFloat($$(`wc-${roomId}`)?.value) || 0,
+    notes: $$(`nt-${roomId}`)?.value || '',
+  };
+  const btn = document.getElementById(`sr-btn-${roomId}`);
+  const msg = document.getElementById(`sr-msg-${roomId}`);
+  try {
+    if (btn) btn.disabled = true;
+    await api.post('/api/billing', payload);
+    if (msg) {
+      msg.textContent = 'Saved ✓';
+      setTimeout(() => { if (msg) msg.textContent = ''; }, 3000);
+    }
+  } catch (e) {
+    if (msg) { msg.style.color = 'var(--danger)'; msg.textContent = e.message; }
+  } finally {
+    if (btn) btn.disabled = false;
+  }
 }
 
 async function deleteBilling(id, month) {
@@ -2889,6 +2921,7 @@ window.submitPayment      = submitPayment;
 window.submitExpense      = submitExpense;
 window.loadUnitBreakdown  = loadUnitBreakdown;
 window.saveBillingUnit    = saveBillingUnit;
+window.saveReading        = saveReading;
 window.calcBilling        = calcBilling;
 window.changeBillingMonth = changeBillingMonth;
 window.printReceipt       = printReceipt;
