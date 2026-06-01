@@ -34,6 +34,7 @@ const STRINGS = {
     water_curr_reading:'Water Meter Reading (UNIT)',
     water_prev_reading:'Prev Reading',
     print_invoice:    'Print Invoice',
+    save_reading:     'Save Reading',
     elec_units:       'units',
     water_fixed:      'Fixed',
     no_util:          'No utilities',
@@ -213,6 +214,7 @@ const STRINGS = {
     water_curr_reading:'水錶讀數 (UNIT)',
     water_prev_reading:'上期讀數',
     print_invoice:    '列印發票',
+    save_reading:     '儲存讀數',
     elec_units:       '度',
     water_fixed:      '固定水費',
     no_util:          '不包水電',
@@ -1045,7 +1047,7 @@ async function renderBilling() {
             🖨 ${t('print_invoice')}
           </button>
           ${!isViewer() ? `<button id="sr-btn-${t_.room_id}" class="btn btn-ghost btn-sm" style="opacity:0.75" onclick="saveReading(${t_.room_id})">
-            💾 Save Reading
+            💾 ${t('save_reading')}
           </button>
           <span id="sr-msg-${t_.room_id}" style="font-size:12px;color:var(--success)"></span>` : ''}
           <span id="bc-msg-${t_.room_id}" style="font-size:12px;color:var(--success)"></span>
