@@ -117,6 +117,7 @@ const STRINGS = {
     cat_water:        'Water',
     cat_garbage:      'Garbage',
     cat_stamp_duty:   'Stamp Duty',
+    cat_svc_mgmt:     'Svc & Mgmt',
     cat_other:        'Other',
     property_lbl:     'Property',
     desc_lbl:         'Description',
@@ -296,6 +297,7 @@ const STRINGS = {
     cat_water:        '水費',
     cat_garbage:      '垃圾費',
     cat_stamp_duty:   '印花稅',
+    cat_svc_mgmt:     '服務及管理費',
     cat_other:        '其他',
     property_lbl:     '物業',
     desc_lbl:         '描述',
@@ -455,7 +457,7 @@ function catLabel(c) {
     govt_rates: t('cat_govt_rates'), govt_rent: t('cat_govt_rent'),
     handling_fee: t('cat_handling_fee'), stamp_duty: t('cat_stamp_duty'),
     electricity: t('cat_electricity'), water: t('cat_water'),
-    garbage: t('cat_garbage'), other: t('cat_other'),
+    garbage: t('cat_garbage'), svc_mgmt: t('cat_svc_mgmt'), other: t('cat_other'),
   };
   return map[c] || c;
 }
@@ -2011,6 +2013,7 @@ async function renderExpenses() {
         <option value="electricity"  ${expCat==='electricity'  ?'selected':''}>${t('cat_electricity')}</option>
         <option value="water"        ${expCat==='water'        ?'selected':''}>${t('cat_water')}</option>
         <option value="garbage"      ${expCat==='garbage'      ?'selected':''}>${t('cat_garbage')}</option>
+        <option value="svc_mgmt"     ${expCat==='svc_mgmt'     ?'selected':''}>${t('cat_svc_mgmt')}</option>
         <option value="other"        ${expCat==='other'        ?'selected':''}>${t('cat_other')}</option>
       </select>
     </div>
@@ -2106,6 +2109,7 @@ function showAddExpense() {
               <option value="electricity">${t('cat_electricity')}</option>
               <option value="water">${t('cat_water')}</option>
               <option value="garbage">${t('cat_garbage')}</option>
+              <option value="svc_mgmt">${t('cat_svc_mgmt')}</option>
               <option value="other">${t('cat_other')}</option>
             </select>
           </div>
@@ -2239,6 +2243,7 @@ function editExpense(id) {
             <option value="electricity"  ${e.category==='electricity'  ? 'selected':''} >${t('cat_electricity')}</option>
             <option value="water"        ${e.category==='water'        ? 'selected':''} >${t('cat_water')}</option>
             <option value="garbage"      ${e.category==='garbage'      ? 'selected':''} >${t('cat_garbage')}</option>
+            <option value="svc_mgmt"     ${e.category==='svc_mgmt'     ? 'selected':''} >${t('cat_svc_mgmt')}</option>
             <option value="other"        ${e.category==='other'        ? 'selected':''} >${t('cat_other')}</option>
           </select>
         </div>
