@@ -353,6 +353,7 @@ async function route(req, res, path, url) {
   if (/^\/api\/payments\/\d+$/.test(path)    && m === 'PUT')    return updatePayment(req, res, seg(path, 3));
   if (/^\/api\/payments\/\d+$/.test(path)    && m === 'DELETE') return deletePayment(res, seg(path, 3));
   if (path === '/api/expenses'                && m === 'POST')   return createExpense(req, res);
+  if (/^\/api\/expenses\/\d+$/.test(path)    && m === 'PUT')    return updateExpense(req, res, seg(path, 3));
   if (/^\/api\/expenses\/\d+$/.test(path)    && m === 'DELETE') return deleteExpense(res, seg(path, 3));
   if (path === '/api/admin/recalc-balances'   && m === 'GET')    return recalcBalances(res);
 
@@ -1164,6 +1165,16 @@ async function createExpense(req, res) {
           d.is_shared ? 1 : 0, d.shared_units ? JSON.stringify(d.shared_units) : null)
     .run();
   return sendJson(res, { success: true, id: result.meta.last_row_id });
+}
+
+async function updateExpense(req, res, id) {
+  const d = req.body || {};
+  await DB.prepare(`
+    UPDATE expenses SET expense_date=?, category=?, amount=?, description=?, unit_label=?
+    WHERE id=?`)
+    .bind(d.expense_date, d.category, parseFloat(d.amount), d.description || null, d.unit_label || null, id)
+    .run();
+  return sendJson(res, { success: true });
 }
 
 async function deleteExpense(res, id) {

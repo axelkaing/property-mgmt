@@ -1855,6 +1855,7 @@ async function renderExpenses() {
 
   const { expenses, properties, allTimeTotal: allTimeExpTotal } =
     await api.get(`/api/expenses-page?${params}`);
+  S.data._expenses = expenses;
 
   const propById = {};
   const propSortMap = {};
@@ -1926,6 +1927,7 @@ async function renderExpenses() {
       const unitDisplay = expUnitLabel(e);
       const slipViewBtn = e.slip_url ? `<button class="btn btn-ghost btn-sm" onclick="viewExpenseSlip(${e.id})">👁 Slip</button>` : '';
       const slipUploadBtn = !isViewer() ? `<label class="btn btn-ghost btn-sm" style="cursor:pointer;margin:0">📎<input type="file" accept=".pdf,.jpg,.jpeg,.png" style="display:none" onchange="uploadExpenseSlip(${e.id}, this)" /></label>` : '';
+      const editBtn   = !isViewer() ? `<button class="btn btn-secondary btn-sm" onclick="editExpense(${e.id})" title="Edit">✏</button>` : '';
       const deleteBtn = !isViewer() ? `<button class="btn btn-danger btn-sm" onclick="deleteExpense(${e.id})">✕</button>` : '';
       let sharedUnits = [];
       if (e.is_shared) { try { sharedUnits = JSON.parse(e.shared_units || '[]'); } catch {} }
@@ -1939,7 +1941,7 @@ async function renderExpenses() {
           <td class="col-exp-cat"><span class="badge badge-blue">${catLabel(e.category)}</span></td>
           <td class="td-money col-exp-amt">${hk(e.amount)}</td>
           <td class="col-mob-hide">${e.description || ''}${sharedLine}</td>
-          <td class="col-mob-hide" style="white-space:nowrap">${slipUploadBtn}${slipViewBtn}${deleteBtn}</td>
+          <td class="col-mob-hide" style="white-space:nowrap">${slipUploadBtn}${slipViewBtn}${editBtn}${deleteBtn}</td>
         </tr>`);
       expCardsArr.push(`
         <div class="exp-card">
@@ -1948,7 +1950,7 @@ async function renderExpenses() {
           <div class="exp-card-row"><span class="exp-card-label">${t('amount_col')}</span><span class="td-money">${hk(e.amount)}</span></div>
           ${e.description ? `<div class="exp-card-row"><span class="exp-card-label">${t('description_col')}</span><span class="text-muted">${e.description}</span></div>` : ''}
           ${sharedLine ? `<div class="exp-card-row"><span class="exp-card-label">Shared</span><span style="font-size:11px;color:var(--accent)">${sharedUnits.join(', ') || '🔗'}</span></div>` : ''}
-          ${(slipUploadBtn || slipViewBtn || deleteBtn) ? `<div class="exp-card-actions">${slipUploadBtn}${slipViewBtn}${deleteBtn}</div>` : ''}
+          ${(slipUploadBtn || slipViewBtn || editBtn || deleteBtn) ? `<div class="exp-card-actions">${slipUploadBtn}${slipViewBtn}${editBtn}${deleteBtn}</div>` : ''}
         </div>`);
     });
   }
@@ -2207,6 +2209,65 @@ async function submitExpense(e) {
 async function deleteExpense(id) {
   if (!confirm(t('del_confirm'))) return;
   await api.delete(`/api/expenses/${id}`);
+  renderExpenses();
+}
+
+function editExpense(id) {
+  const e = (S.data._expenses || []).find(x => x.id === id);
+  if (!e) return;
+  const unitLabel = expUnitLabel(e);
+  openModal('✏ Edit Expense', `
+    <form id="edit-exp-form" onsubmit="submitEditExpense(event, ${id})">
+      <div class="form-grid">
+        <div class="form-group">
+          <label>Unit Label</label>
+          <input type="text" id="edit-exp-unit" value="${unitLabel}" placeholder="e.g. 2F/WS-A" />
+        </div>
+        <div class="form-group">
+          <label>${t('expense_date')}</label>
+          <input type="date" id="edit-exp-date" value="${e.expense_date}" required />
+        </div>
+        <div class="form-group">
+          <label>${t('category_lbl')}</label>
+          <select id="edit-exp-cat" required>
+            <option value="govt_rent"    ${e.category==='govt_rent'    ? 'selected':''} >${t('cat_govt_rent')}</option>
+            <option value="govt_rates"   ${e.category==='govt_rates'   ? 'selected':''} >${t('cat_govt_rates')}</option>
+            <option value="repairs"      ${e.category==='repairs'      ? 'selected':''} >${t('cat_repairs')}</option>
+            <option value="insurance"    ${e.category==='insurance'    ? 'selected':''} >${t('cat_insurance')}</option>
+            <option value="stamp_duty"   ${e.category==='stamp_duty'   ? 'selected':''} >${t('cat_stamp_duty')}</option>
+            <option value="handling_fee" ${e.category==='handling_fee' ? 'selected':''} >${t('cat_handling_fee')}</option>
+            <option value="electricity"  ${e.category==='electricity'  ? 'selected':''} >${t('cat_electricity')}</option>
+            <option value="water"        ${e.category==='water'        ? 'selected':''} >${t('cat_water')}</option>
+            <option value="garbage"      ${e.category==='garbage'      ? 'selected':''} >${t('cat_garbage')}</option>
+            <option value="other"        ${e.category==='other'        ? 'selected':''} >${t('cat_other')}</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>${t('amount_lbl')}</label>
+          <input type="number" id="edit-exp-amount" step="0.01" min="0" required value="${e.amount}" />
+        </div>
+        <div class="form-group full">
+          <label>${t('desc_lbl')}</label>
+          <input type="text" id="edit-exp-desc" value="${e.description || ''}" placeholder="Optional" />
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-ghost" onclick="closeModal()">${t('cancel')}</button>
+        <button type="submit" class="btn btn-primary">💾 ${t('save')}</button>
+      </div>
+    </form>`);
+}
+
+async function submitEditExpense(event, id) {
+  event.preventDefault();
+  await api.put(`/api/expenses/${id}`, {
+    unit_label:   $$('edit-exp-unit').value.trim() || null,
+    expense_date: $$('edit-exp-date').value,
+    category:     $$('edit-exp-cat').value,
+    amount:       parseFloat($$('edit-exp-amount').value),
+    description:  $$('edit-exp-desc').value.trim() || null,
+  });
+  closeModal();
   renderExpenses();
 }
 
@@ -2880,6 +2941,8 @@ window.closeModal         = closeModal;
 window.deleteBilling      = deleteBilling;
 window.deletePayment      = deletePayment;
 window.deleteExpense      = deleteExpense;
+window.editExpense        = editExpense;
+window.submitEditExpense  = submitEditExpense;
 window.uploadExpenseSlip  = uploadExpenseSlip;
 window.viewExpenseSlip    = viewExpenseSlip;
 window.viewPaymentProof   = viewPaymentProof;
