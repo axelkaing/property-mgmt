@@ -343,6 +343,7 @@ async function route(req, res, path, url) {
   // Write routes (admin only):
   if (!isAdmin) return sendErr(res, 'Forbidden', 403);
 
+  if (path === '/api/tenants'               && m === 'POST')   return createTenant(req, res);
   if (/^\/api\/tenants\/\d+$/.test(path)   && m === 'PUT')    return updateTenant(req, res, seg(path, 3));
   if (/^\/api\/contracts\/\d+$/.test(path) && m === 'POST')   return uploadContract(req, res, seg(path, 3));
   if (/^\/api\/contracts\/\d+$/.test(path) && m === 'DELETE') return deleteContract(res, seg(path, 3));
@@ -494,6 +495,28 @@ async function getTenantsDirectory(res) {
     LEFT JOIN tenants t ON t.room_id = r.id AND t.active = 1
     ORDER BY p.sort_order, p.id, r.room_label`).all();
   return sendJson(res, rows.results);
+}
+
+async function createTenant(req, res) {
+  const d = req.body || {};
+  if (!d.room_id) return sendErr(res, 'room_id required');
+
+  const existing = await DB.prepare(`SELECT id FROM tenants WHERE room_id=? AND active=1`).bind(d.room_id).first();
+  if (existing) return sendErr(res, 'Room already has an active tenant');
+
+  const result = await DB.prepare(`
+    INSERT INTO tenants (room_id, name, phone, rent, deposit, elec_rate, water_type, water_rate,
+      contract_start, contract_end, remark, commission, active, outstanding_balance)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,0,1,0)`)
+    .bind(d.room_id, d.name || '', d.phone || null,
+          parseFloat(d.rent) || 0, parseFloat(d.deposit) || 0,
+          parseFloat(d.elec_rate) || 0, d.water_type || 'none', parseFloat(d.water_rate) || 0,
+          d.contract_start || null, d.contract_end || null, d.remark || null)
+    .run();
+
+  await DB.prepare(`UPDATE rooms SET status='occupied' WHERE id=?`).bind(d.room_id).run();
+
+  return sendJson(res, { success: true, id: result.meta.last_row_id });
 }
 
 async function uploadContract(req, res, tenantId) {

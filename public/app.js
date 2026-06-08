@@ -180,6 +180,12 @@ const STRINGS = {
     view_contract:    'View Contract',
     remove_contract:  'Remove Contract',
     uploading_lbl:    'Uploading…',
+    add_tenant:       'Add Tenant',
+    elec_rate_lbl:    'Elec Rate ($/unit)',
+    water_type_lbl:   'Water Type',
+    water_rate_lbl:   'Water Rate (HK$)',
+    water_meter:      'Meter',
+    water_none:       'None',
   },
   tc: {
     app_title: '物業管理',
@@ -360,6 +366,12 @@ const STRINGS = {
     view_contract:    '查看合約',
     remove_contract:  '刪除合約',
     uploading_lbl:    '上傳中…',
+    add_tenant:       '新增租客',
+    elec_rate_lbl:    '電費率 ($/度)',
+    water_type_lbl:   '水費類型',
+    water_rate_lbl:   '水費 (HK$)',
+    water_meter:      '按錶',
+    water_none:       '不包',
   },
 };
 
@@ -724,7 +736,10 @@ async function renderTenants() {
             <span class="tenant-field-value">${escHtml(u.remark || '—')}</span>
           </div>
         </div>
-        ${!isVacant ? `
+        ${isVacant ? (!isViewer() ? `
+        <div class="tenant-card-actions">
+          <button class="btn btn-primary btn-sm" onclick="openAddTenant(${u.room_id})">+ ${t('add_tenant')}</button>
+        </div>` : '') : `
         <div class="tenant-card-actions">
           ${u.contract_url ? `<span class="contract-btn-group"><button class="btn btn-ghost btn-sm" onclick="viewTenantContract(${u.tenant_id})">📄 ${t('view_contract')}</button>${!isViewer() ? `<button class="btn btn-danger btn-sm contract-remove-btn" onclick="deleteTenantContract(${u.tenant_id})" title="${t('remove_contract')}">✕</button>` : ''}</span>` : ''}
           ${!isViewer() ? `
@@ -734,7 +749,7 @@ async function renderTenants() {
             </label>
             <button class="btn btn-ghost btn-sm" onclick="openTenantEdit(${u.room_id})">✏ ${t('edit_tenant')}</button>
           ` : ''}
-        </div>` : ''}
+        </div>`}
       </div>`;
   }).join('');
 
@@ -869,6 +884,91 @@ async function saveTenantEdit(e) {
     commission:     data.commission || 0,
   });
 
+  closeModal();
+  await renderTenants();
+}
+
+function openAddTenant(roomId) {
+  const u = window._tenantDirData[roomId];
+  if (!u) return;
+  window._addTenantRoom = roomId;
+  openModal(`+ ${t('add_tenant')} — ${fmtUnit(u.property_code, u.room_label)}`, `
+    <form id="add-tenant-form" onsubmit="saveNewTenant(event)">
+      <div class="form-grid">
+        <div class="form-group full">
+          <label>${t('tenant_col')}</label>
+          <input type="text" id="ta-name" required />
+        </div>
+        <div class="form-group full">
+          <label>${t('phone_lbl')}</label>
+          <input type="text" id="ta-phone" placeholder="e.g. 9123 4567" />
+        </div>
+        <div class="form-group">
+          <label>${t('lease_start_lbl')}</label>
+          <input type="date" id="ta-start" />
+        </div>
+        <div class="form-group">
+          <label>${t('lease_end_lbl')}</label>
+          <input type="date" id="ta-end" />
+        </div>
+        <div class="form-group">
+          <label>${t('tenant_rent_lbl')}</label>
+          <input type="number" id="ta-rent" step="1" min="0" required />
+        </div>
+        <div class="form-group">
+          <label>${t('deposit_lbl')}</label>
+          <input type="number" id="ta-deposit" step="1" min="0" value="0" />
+        </div>
+        <div class="form-group">
+          <label>${t('elec_rate_lbl')}</label>
+          <input type="number" id="ta-elec-rate" step="0.01" min="0" value="0" />
+        </div>
+        <div class="form-group">
+          <label>${t('water_type_lbl')}</label>
+          <select id="ta-water-type" onchange="toggleAddTenantWaterRate()">
+            <option value="none">${t('water_none')}</option>
+            <option value="fixed">${t('water_fixed')}</option>
+            <option value="meter">${t('water_meter')}</option>
+          </select>
+        </div>
+        <div class="form-group" id="ta-water-rate-group" style="display:none">
+          <label>${t('water_rate_lbl')}</label>
+          <input type="number" id="ta-water-rate" step="0.01" min="0" value="0" />
+        </div>
+        <div class="form-group full">
+          <label>${t('remark_lbl')}</label>
+          <textarea id="ta-remark" rows="3"></textarea>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-ghost" onclick="closeModal()">${t('cancel')}</button>
+        <button type="submit" class="btn btn-primary">💾 ${t('save')}</button>
+      </div>
+    </form>`);
+}
+
+function toggleAddTenantWaterRate() {
+  const wt = $$('ta-water-type')?.value;
+  const grp = $$('ta-water-rate-group');
+  if (grp) grp.style.display = (wt === 'fixed' || wt === 'meter') ? '' : 'none';
+}
+
+async function saveNewTenant(e) {
+  e.preventDefault();
+  const roomId = window._addTenantRoom;
+  await api.post('/api/tenants', {
+    room_id:        roomId,
+    name:           $$('ta-name').value,
+    phone:          $$('ta-phone').value || null,
+    contract_start: $$('ta-start').value || null,
+    contract_end:   $$('ta-end').value || null,
+    rent:           parseFloat($$('ta-rent').value) || 0,
+    deposit:        parseFloat($$('ta-deposit').value) || 0,
+    elec_rate:      parseFloat($$('ta-elec-rate').value) || 0,
+    water_type:     $$('ta-water-type').value || 'none',
+    water_rate:     parseFloat($$('ta-water-rate').value) || 0,
+    remark:         $$('ta-remark').value || null,
+  });
   closeModal();
   await renderTenants();
 }
@@ -2406,11 +2506,26 @@ function computeUnitData(unit, year, raw) {
     for (const ms of Object.keys(unitOccupied)) unitOccupied[ms] = true;
   }
 
-  const primaryTenant = roomTenants.find(t => {
+  function overlapsYear(t) {
     const cs = t.contract_start ? t.contract_start.slice(0, 7) : '0000-01';
     const ce = t.contract_end   ? t.contract_end.slice(0, 7)   : '9999-12';
     return cs <= cyMEnd && ce >= cyMStart;
-  }) || roomTenants[0] || null;
+  }
+  const primaryTenant = roomTenants.find(t => t.active === 1 && overlapsYear(t))
+    || roomTenants.find(t => overlapsYear(t))
+    || roomTenants[0] || null;
+
+  const prevTenants = roomTenants
+    .filter(t => t.tenant_id !== primaryTenant?.tenant_id && overlapsYear(t))
+    .map(t => {
+      const csRaw = t.contract_start ? t.contract_start.slice(0, 7) : cyMStart;
+      const ceRaw = t.contract_end   ? t.contract_end.slice(0, 7)   : cyMEnd;
+      return {
+        name: t.name,
+        startMonth: csRaw < cyMStart ? cyMStart : csRaw,
+        endMonth:   ceRaw > cyMEnd   ? cyMEnd   : ceRaw,
+      };
+    });
 
   const tenant_id      = primaryTenant?.tenant_id ?? null;
   const rent           = primaryTenant?.rent || 0;
@@ -2425,6 +2540,12 @@ function computeUnitData(unit, year, raw) {
   const incomeMonthFirst = payMonths[0] || null;
   const incomeMonthLast  = payMonths[payMonths.length - 1] || null;
   const incomeMonthCount = payMonths.length;
+
+  // Combined income: all room tenants for the year (used when mid-year tenant change)
+  const allRoomTenantIds = new Set(roomTenants.map(t => t.tenant_id).filter(Boolean));
+  const combinedIncome = payments
+    .filter(p => allRoomTenantIds.has(p.tenant_id) && p.billing_month >= cyMStart && p.billing_month <= cyMEnd)
+    .reduce((s, p) => s + p.amount, 0);
 
   // Rule 1: handling_fee — ÷13, exclude 4F/SH
   const hfRows = expenses.filter(e => e.category === 'handling_fee');
@@ -2499,8 +2620,10 @@ function computeUnitData(unit, year, raw) {
   return {
     unit, year,
     tenantName: primaryTenant?.name || null,
+    prevTenants,
     rent,
     income,
+    combinedIncome,
     incomeMonthFirst,
     incomeMonthLast,
     incomeMonthCount,
@@ -2613,14 +2736,22 @@ async function renderSummary() {
           <strong style="font-size:18px;color:${color};letter-spacing:-.3px;flex-shrink:0">${unit}</strong>
           <span style="font-size:10px;font-weight:600;color:${color};background:${color}12;border:1px solid ${color}30;border-radius:4px;padding:2px 7px;white-space:nowrap;margin-top:3px">Calendar Year ${fy}: Jan–Dec</span>
         </div>
-        <div style="font-size:13px;color:var(--muted);margin-bottom:12px">${tc ? '租客' : 'Tenant'}: <strong style="color:var(--text)">${d.tenantName || '—'}</strong></div>
+        <div style="font-size:13px;color:var(--muted);margin-bottom:12px">
+          ${tc ? '租客' : 'Tenant'}: <strong style="color:var(--text)">${d.tenantName || '—'}</strong>
+          ${(d.prevTenants && d.prevTenants.length > 0) ? d.prevTenants.map(pt => {
+            const sm = parseInt(pt.startMonth.slice(5, 7));
+            const em = parseInt(pt.endMonth.slice(5, 7));
+            const mStr = sm === em ? MNAMES[sm-1] : `${MNAMES[sm-1]}–${MNAMES[em-1]}`;
+            return `<br><span style="font-size:11px;color:var(--muted);opacity:.7">${escHtml(pt.name)} (${mStr})</span>`;
+          }).join('') : ''}
+        </div>
         <div class="tax-row" style="font-size:14px">
           <span>${tc ? '合約租金' : 'Contract Rent'}</span>
           <span><span style="font-size:11px;opacity:.6">${hk(d.rent)} × 12 = </span><strong>${hk(d.contractRent)}</strong></span>
         </div>
         <div class="tax-row" style="font-size:14px;margin-top:4px">
-          <span>${tc ? '收租收入' : 'Rental Income'}${incomeNote}</span>
-          <strong style="color:var(--success)">${hk(d.income)}</strong>
+          <span>${tc ? '收租收入' : 'Rental Income'}${(d.prevTenants && d.prevTenants.length > 0) ? '' : incomeNote}</span>
+          <strong style="color:var(--success)">${hk(d.combinedIncome ?? d.income)}</strong>
         </div>
         <div style="margin-top:12px;padding-top:10px;border-top:1px dashed var(--border)">
           <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">${tc ? '支出' : 'Expenses'}</div>
