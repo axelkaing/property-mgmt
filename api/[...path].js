@@ -304,6 +304,14 @@ async function ensureSchema() {
       await DB.prepare(`INSERT OR REPLACE INTO _schema_flags (key,value) VALUES ('chen_balance_zero_v1','1')`).run();
     }
   } catch { /* ignore */ }
+
+  try {
+    const flagKS = await DB.prepare(`SELECT value FROM _schema_flags WHERE key='bank_acct_4fks_v1'`).first();
+    if (!flagKS) {
+      await DB.prepare(`UPDATE properties SET bank_account='005-9-124073' WHERE code='4F/KS'`).run();
+      await DB.prepare(`INSERT OR REPLACE INTO _schema_flags (key,value) VALUES ('bank_acct_4fks_v1','1')`).run();
+    }
+  } catch { /* ignore */ }
 }
 
 // ── Router ────────────────────────────────────────────────────────────────────
@@ -494,7 +502,23 @@ async function getTenantsDirectory(res) {
     JOIN properties p ON p.id = r.property_id
     LEFT JOIN tenants t ON t.room_id = r.id AND t.active = 1
     ORDER BY p.sort_order, p.id, r.room_label`).all();
-  return sendJson(res, rows.results);
+
+  const prevRows = await DB.prepare(`
+    SELECT room_id, id as tenant_id, name, phone, rent, deposit, remark, contract_start, contract_end
+    FROM tenants WHERE active = 0
+    ORDER BY contract_end DESC`).all();
+
+  const prevByRoom = {};
+  for (const r of prevRows.results) {
+    if (!prevByRoom[r.room_id]) prevByRoom[r.room_id] = [];
+    prevByRoom[r.room_id].push(r);
+  }
+
+  const result = rows.results.map(r => ({
+    ...r,
+    prev_tenants: prevByRoom[r.room_id] || [],
+  }));
+  return sendJson(res, result);
 }
 
 async function createTenant(req, res) {

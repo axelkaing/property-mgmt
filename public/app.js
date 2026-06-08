@@ -186,6 +186,7 @@ const STRINGS = {
     water_rate_lbl:   'Water Rate (HK$)',
     water_meter:      'Meter',
     water_none:       'None',
+    prev_tenants_lbl: 'Previous Tenants',
   },
   tc: {
     app_title: '物業管理',
@@ -372,6 +373,7 @@ const STRINGS = {
     water_rate_lbl:   '水費 (HK$)',
     water_meter:      '按錶',
     water_none:       '不包',
+    prev_tenants_lbl: '前任租客',
   },
 };
 
@@ -735,6 +737,21 @@ async function renderTenants() {
             <span class="tenant-field-label">${t('remark_lbl')}</span>
             <span class="tenant-field-value">${escHtml(u.remark || '—')}</span>
           </div>
+          ${u.prev_tenants && u.prev_tenants.length > 0 ? `
+          <div style="margin-top:10px;padding-top:8px;border-top:1px dashed var(--border)">
+            <div style="font-size:11px;font-weight:600;color:var(--muted);margin-bottom:5px">${t('prev_tenants_lbl')}</div>
+            ${u.prev_tenants.map(p => `
+              <div onclick="togglePrevTenant(this)" style="cursor:pointer;font-size:12px;color:var(--muted);display:flex;justify-content:space-between;gap:8px;padding:3px 0;user-select:none">
+                <span><span class="pt-arrow">▸</span> ${escHtml(p.name || '—')}</span>
+                <span style="opacity:.7">${fmtDateDMY(p.contract_start)} — ${fmtDateDMY(p.contract_end)}</span>
+              </div>
+              <div style="display:none;padding:4px 0 4px 14px;font-size:12px;color:var(--muted)">
+                <div style="display:flex;justify-content:space-between;padding:1px 0"><span>${t('phone_lbl')}</span><span>${escHtml(p.phone || '—')}</span></div>
+                <div style="display:flex;justify-content:space-between;padding:1px 0"><span>${t('tenant_rent_lbl')}</span><span>${p.rent ? hk(p.rent) : '—'}</span></div>
+                <div style="display:flex;justify-content:space-between;padding:1px 0"><span>${t('deposit_lbl')}</span><span>${p.deposit ? hk(p.deposit) : '—'}</span></div>
+                <div style="display:flex;justify-content:space-between;padding:1px 0"><span>${t('remark_lbl')}</span><span>${escHtml(p.remark || '—')}</span></div>
+              </div>`).join('')}
+          </div>` : ''}
         </div>
         ${isVacant ? (!isViewer() ? `
         <div class="tenant-card-actions">
@@ -886,6 +903,13 @@ async function saveTenantEdit(e) {
 
   closeModal();
   await renderTenants();
+}
+
+function togglePrevTenant(el) {
+  const details = el.nextElementSibling;
+  const open = details.style.display !== 'none';
+  details.style.display = open ? 'none' : '';
+  el.querySelector('.pt-arrow').textContent = open ? '▸' : '▾';
 }
 
 function openAddTenant(roomId) {
@@ -2552,21 +2576,51 @@ function computeUnitData(unit, year, raw) {
     .filter(t => overlapsYear(t))
     .sort((a, b) => (b.active - a.active) || ((b.tenant_id || 0) - (a.tenant_id || 0)));
 
-  function computeTenantFigures(tenant) {
+  function computeTenantFigures(tenant, opts = {}) {
+    const role = opts.role || 'single';
+
     const csRaw = tenant.contract_start ? tenant.contract_start.slice(0, 7) : cyMStart;
     const ceRaw = tenant.contract_end   ? tenant.contract_end.slice(0, 7)   : cyMEnd;
     const startM = csRaw < cyMStart ? cyMStart : csRaw;
     const endM   = ceRaw > cyMEnd   ? cyMEnd   : ceRaw;
-    const monthSet = new Set();
-    let cur = startM;
-    while (cur <= endM) {
-      monthSet.add(cur);
-      const [y2, m2] = cur.split('-').map(Number);
-      cur = m2 === 12 ? `${y2+1}-01` : `${y2}-${String(m2+1).padStart(2,'0')}`;
+
+    // For 'prev' role: income-only display, no expenses or tax
+    if (role === 'prev') {
+      const tid = tenant.tenant_id ?? null;
+      const tPays = tid ? payments.filter(p => p.tenant_id === tid) : [];
+      const tIncome = tPays.reduce((s, p) => s + p.amount, 0);
+      return {
+        role, tenantName: tenant.name, startMonth: startM, endMonth: endM,
+        rent: tenant.rent || 0, fyMonths: 0, contractRent: 0, income: tIncome,
+        expProp: {}, expPropDivisors: {}, expShared: {}, expSharedDivisors: {},
+        expUnit: {}, handlingFee: 0, expTotal: {}, totalExpenses: 0,
+        govtRates: 0, taxBase: 0, tax: 0, netIncome: 0, afterTaxIncome: 0,
+      };
     }
+
+    // For 'active' role: use full calendar year for expense computation; income = combinedIncome
+    // For 'single' role: use tenant's own months (original behaviour)
+    const expMonthSet = new Set();
+    if (role === 'active') {
+      let cur = cyMStart;
+      while (cur <= cyMEnd) {
+        expMonthSet.add(cur);
+        const [y2, m2] = cur.split('-').map(Number);
+        cur = m2 === 12 ? `${y2+1}-01` : `${y2}-${String(m2+1).padStart(2,'0')}`;
+      }
+    } else {
+      let cur = startM;
+      while (cur <= endM) {
+        expMonthSet.add(cur);
+        const [y2, m2] = cur.split('-').map(Number);
+        cur = m2 === 12 ? `${y2+1}-01` : `${y2}-${String(m2+1).padStart(2,'0')}`;
+      }
+    }
+    const monthSet = expMonthSet;
+
     const tid = tenant.tenant_id ?? null;
     const tPays = tid ? payments.filter(p => p.tenant_id === tid && monthSet.has(p.billing_month)) : [];
-    const tIncome = tPays.reduce((s, p) => s + p.amount, 0);
+    const tIncome = role === 'active' ? (opts.combinedIncome ?? 0) : tPays.reduce((s, p) => s + p.amount, 0);
     let tHandlingFee = 0;
     if (!is4FSH) {
       const hfTot = expenses.filter(e => e.category === 'handling_fee').reduce((s, r) => s + r.amount, 0);
@@ -2615,14 +2669,26 @@ function computeUnitData(unit, year, raw) {
     if (tHandlingFee > 0) tExpTotal.handling_fee = tHandlingFee;
     const tTotalExp  = Object.values(tExpTotal).reduce((s, v) => s + v, 0);
     const tRent      = tenant.rent || 0;
-    const tCR        = tRent * 12;
+    const fyMStart   = `${fyYear}-04`;
+    const fyMEnd     = `${fyYear + 1}-03`;
+    // fyMonths uses the tenant's own occupancy period (not expMonthSet)
+    const ownMonthSet = new Set();
+    { let cur = startM;
+      while (cur <= endM) {
+        ownMonthSet.add(cur);
+        const [y2, m2] = cur.split('-').map(Number);
+        cur = m2 === 12 ? `${y2+1}-01` : `${y2}-${String(m2+1).padStart(2,'0')}`;
+      }
+    }
+    const fyMonths   = [...ownMonthSet].filter(ms => ms >= fyMStart && ms <= fyMEnd).length;
+    const tCR        = tRent * fyMonths;
     const tNet       = tIncome - tTotalExp;
     const tTaxBase   = Math.max(0, tCR - tGovtRates);
     const tTax       = tTaxBase * 0.8 * 0.15;
     const tAfter     = tNet - tTax;
     return {
-      tenantName: tenant.name, startMonth: startM, endMonth: endM,
-      rent: tRent, contractRent: tCR, income: tIncome,
+      role, tenantName: tenant.name, startMonth: startM, endMonth: endM,
+      rent: tRent, fyMonths, contractRent: tCR, income: tIncome,
       expProp: tExpProp, expPropDivisors: tExpPropDivisors,
       expShared: tExpShared, expSharedDivisors: tExpSharedDivisors,
       expUnit: tExpUnit, handlingFee: tHandlingFee,
@@ -2632,7 +2698,12 @@ function computeUnitData(unit, year, raw) {
     };
   }
 
-  const perTenantData = tenantsInYear.length > 1 ? tenantsInYear.map(computeTenantFigures) : null;
+  const perTenantData = tenantsInYear.length > 1
+    ? tenantsInYear.map((t, i) =>
+        computeTenantFigures(t, i === 0
+          ? { role: 'active', combinedIncome }
+          : { role: 'prev' }))
+    : null;
 
   // Rule 1: handling_fee — ÷13, exclude 4F/SH
   const hfRows = expenses.filter(e => e.category === 'handling_fee');
@@ -2791,6 +2862,27 @@ async function renderSummary() {
       };
 
       const mkPane = td => {
+        const sm = parseInt(td.startMonth.slice(5,7)), em = parseInt(td.endMonth.slice(5,7));
+        const per = sm === em ? MNAMES[sm-1] : `${MNAMES[sm-1]}–${MNAMES[em-1]}`;
+        const nameRow = `
+          <div style="font-size:13px;color:var(--muted);margin-bottom:10px">
+            <strong style="color:var(--text)">${escHtml(td.tenantName||'—')}</strong>
+            <span style="font-size:11px;opacity:.7"> (${per})</span>
+          </div>`;
+
+        // Previous tenant: income only, no expenses or tax
+        if (td.role === 'prev') {
+          return nameRow + `
+          <div class="tax-row" style="font-size:13px;margin-top:4px">
+            <span>${tc?'收租收入':'Rental Income'}</span>
+            <strong style="color:var(--success)">${hk(td.income)}</strong>
+          </div>
+          <div style="margin-top:8px;font-size:11px;color:var(--muted);font-style:italic">
+            ${tc?'此租客收入已包含在以上合計':'Income included in combined total above.'}
+          </div>`;
+        }
+
+        // Active / single tenant: full breakdown
         const dl = {};
         catOrder.forEach(k => {
           if (k === 'handling_fee') { dl[k] = '÷13'; return; }
@@ -2805,21 +2897,18 @@ async function renderSummary() {
           const dv = dl[k] ? ` <span style="font-size:11px;opacity:.6">(${dl[k]})</span>` : '';
           return `<div class="tax-row" style="font-size:13px"><span style="color:var(--muted)">${catLabels[k]}${dv}</span><span>− ${hk(td.expTotal[k])}</span></div>`;
         }).join('');
-        const sm = parseInt(td.startMonth.slice(5,7)), em = parseInt(td.endMonth.slice(5,7));
-        const per = sm === em ? MNAMES[sm-1] : `${MNAMES[sm-1]}–${MNAMES[em-1]}`;
         const nc = td.netIncome >= 0 ? 'var(--success)' : 'var(--danger)';
         const ac = td.afterTaxIncome >= 0 ? 'var(--success)' : 'var(--danger)';
-        return `
-          <div style="font-size:13px;color:var(--muted);margin-bottom:10px">
-            <strong style="color:var(--text)">${escHtml(td.tenantName||'—')}</strong>
-            <span style="font-size:11px;opacity:.7"> (${per})</span>
-          </div>
+        const incomeLabel = td.role === 'active'
+          ? (tc ? '收租收入（合計）' : 'Rental Income (combined)')
+          : (tc ? '收租收入' : 'Rental Income');
+        return nameRow + `
           <div class="tax-row" style="font-size:13px">
             <span>${tc?'合約租金':'Contract Rent'}</span>
-            <span><span style="font-size:11px;opacity:.6">${hk(td.rent)} × 12 = </span><strong>${hk(td.contractRent)}</strong></span>
+            <span><span style="font-size:11px;opacity:.6">${hk(td.rent)} × ${td.fyMonths}mo FY = </span><strong>${hk(td.contractRent)}</strong></span>
           </div>
           <div class="tax-row" style="font-size:13px;margin-top:4px">
-            <span>${tc?'收租收入':'Rental Income'}</span>
+            <span>${incomeLabel}</span>
             <strong style="color:var(--success)">${hk(td.income)}</strong>
           </div>
           <div style="margin-top:10px;padding-top:8px;border-top:1px dashed var(--border)">
@@ -2840,7 +2929,7 @@ async function renderSummary() {
                 <span style="color:var(--muted)">${tc?'估計物業稅':'Est. Property Tax'} <span style="opacity:.65">(FY, ${fyS}–${fyE})</span></span>
                 <span style="color:var(--danger);font-weight:600">− ${hk(td.tax)}</span>
               </div>
-              <div style="margin-top:2px;color:var(--muted);opacity:.8">(${hk(td.contractRent)} − ${hk(td.govtRates)} rates) × 80% × 15% = ${hk(td.tax)}</div>
+              <div style="margin-top:2px;color:var(--muted);opacity:.8">(${hk(td.rent)} × ${td.fyMonths}mo − ${hk(td.govtRates)} rates) × 80% × 15% = ${hk(td.tax)}</div>
             </div>
             <div class="tax-row" style="margin-top:10px">
               <span style="font-weight:700;font-size:14px">${tc?'稅後收入':'After-Tax Income'}</span>
