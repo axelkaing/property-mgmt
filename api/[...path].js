@@ -1456,10 +1456,10 @@ async function getSummaryUnit(res, url) {
         AND expense_date>=? AND expense_date<=?`)
       .bind(cyDStart, cyDEnd).all(),
 
-    // CY govt_rates for tax basis (Jan year – Dec year)
+    // FY govt_rates for tax basis (Apr year – Mar year+1)
     DB.prepare(`SELECT amount, expense_date FROM expenses
       WHERE property_id=? AND category='govt_rates' AND expense_date>=? AND expense_date<=?`)
-      .bind(property_id, cyDStart, cyDEnd).all(),
+      .bind(property_id, fyDStart, fyDEnd).all(),
   ]);
 
   // Rule 1: handling_fee — ÷13, exclude 4F/SH
@@ -1595,7 +1595,7 @@ async function getSummaryAll(res, url) {
       FROM expenses e
       WHERE e.category = 'govt_rates'
         AND e.expense_date >= ? AND e.expense_date <= ?`
-    ).bind(cyDStart, cyDEnd).all(),
+    ).bind(fyDStart, fyDEnd).all(),
   ]);
 
   return sendJson(res, {

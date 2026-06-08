@@ -2757,7 +2757,7 @@ function computeUnitData(unit, year, raw) {
     }
   }
 
-  // CY govt_rates for property tax (calendar year Jan–Dec)
+  // FY govt_rates for property tax basis (Apr year – Mar year+1)
   let govtRates = 0;
   for (const r of fyGovtRates.filter(e => e.property_id === property_id)) {
     const ms = r.expense_date.slice(0, 7);
@@ -2903,9 +2903,12 @@ async function renderSummary() {
         // Income row: formula display for active role
         const prevTd = td.role === 'active' ? d.perTenantData.find(x => x.role === 'prev') : null;
         const incomeRow = prevTd
-          ? `<div class="tax-row" style="font-size:13px;margin-top:4px">
+          ? `<div class="tax-row" style="font-size:13px;margin-top:4px;align-items:flex-start">
               <span>${tc?'收租收入（合計）':'Rental Income (combined)'}</span>
-              <strong style="color:var(--success)"><span style="font-size:11px;opacity:.65;font-weight:400">${hk(prevTd.income)} + ${hk(td.ownIncome)} = </span>${hk(td.income)}</strong>
+              <div style="text-align:right">
+                <div style="font-size:11px;color:var(--muted)">${hk(prevTd.income)} + ${hk(td.ownIncome)} =</div>
+                <strong style="color:var(--success)">${hk(td.income)}</strong>
+              </div>
             </div>`
           : `<div class="tax-row" style="font-size:13px;margin-top:4px">
               <span>${tc?'收租收入':'Rental Income'}</span>
