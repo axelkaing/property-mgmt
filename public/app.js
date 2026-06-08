@@ -2620,7 +2620,8 @@ function computeUnitData(unit, year, raw) {
 
     const tid = tenant.tenant_id ?? null;
     const tPays = tid ? payments.filter(p => p.tenant_id === tid && monthSet.has(p.billing_month)) : [];
-    const tIncome = role === 'active' ? (opts.combinedIncome ?? 0) : tPays.reduce((s, p) => s + p.amount, 0);
+    const tOwnIncome = tPays.reduce((s, p) => s + p.amount, 0);
+    const tIncome = role === 'active' ? (opts.combinedIncome ?? 0) : tOwnIncome;
     let tHandlingFee = 0;
     if (!is4FSH) {
       const hfTot = expenses.filter(e => e.category === 'handling_fee').reduce((s, r) => s + r.amount, 0);
@@ -2671,16 +2672,18 @@ function computeUnitData(unit, year, raw) {
     const tRent      = tenant.rent || 0;
     const fyMStart   = `${fyYear}-04`;
     const fyMEnd     = `${fyYear + 1}-03`;
-    // fyMonths uses the tenant's own occupancy period (not expMonthSet)
-    const ownMonthSet = new Set();
-    { let cur = startM;
-      while (cur <= endM) {
-        ownMonthSet.add(cur);
+    // fyMonths: tenant's contract months within the FY (Apr–Mar), using raw dates before CY clamping
+    const fyMonthSet = new Set();
+    { const fyStart = csRaw < fyMStart ? fyMStart : csRaw;
+      const fyEnd   = ceRaw > fyMEnd   ? fyMEnd   : ceRaw;
+      let cur = fyStart;
+      while (cur <= fyEnd) {
+        fyMonthSet.add(cur);
         const [y2, m2] = cur.split('-').map(Number);
         cur = m2 === 12 ? `${y2+1}-01` : `${y2}-${String(m2+1).padStart(2,'0')}`;
       }
     }
-    const fyMonths   = [...ownMonthSet].filter(ms => ms >= fyMStart && ms <= fyMEnd).length;
+    const fyMonths = fyMonthSet.size;
     const tCR        = tRent * fyMonths;
     const tNet       = tIncome - tTotalExp;
     const tTaxBase   = Math.max(0, tCR - tGovtRates);
@@ -2688,7 +2691,7 @@ function computeUnitData(unit, year, raw) {
     const tAfter     = tNet - tTax;
     return {
       role, tenantName: tenant.name, startMonth: startM, endMonth: endM,
-      rent: tRent, fyMonths, contractRent: tCR, income: tIncome,
+      rent: tRent, fyMonths, contractRent: tCR, income: tIncome, ownIncome: tOwnIncome,
       expProp: tExpProp, expPropDivisors: tExpPropDivisors,
       expShared: tExpShared, expSharedDivisors: tExpSharedDivisors,
       expUnit: tExpUnit, handlingFee: tHandlingFee,
@@ -2876,9 +2879,6 @@ async function renderSummary() {
           <div class="tax-row" style="font-size:13px;margin-top:4px">
             <span>${tc?'收租收入':'Rental Income'}</span>
             <strong style="color:var(--success)">${hk(td.income)}</strong>
-          </div>
-          <div style="margin-top:8px;font-size:11px;color:var(--muted);font-style:italic">
-            ${tc?'此租客收入已包含在以上合計':'Income included in combined total above.'}
           </div>`;
         }
 
@@ -2899,18 +2899,42 @@ async function renderSummary() {
         }).join('');
         const nc = td.netIncome >= 0 ? 'var(--success)' : 'var(--danger)';
         const ac = td.afterTaxIncome >= 0 ? 'var(--success)' : 'var(--danger)';
-        const incomeLabel = td.role === 'active'
-          ? (tc ? '收租收入（合計）' : 'Rental Income (combined)')
-          : (tc ? '收租收入' : 'Rental Income');
+
+        // Income row: formula display for active role
+        const prevTd = td.role === 'active' ? d.perTenantData.find(x => x.role === 'prev') : null;
+        const incomeRow = prevTd
+          ? `<div class="tax-row" style="font-size:13px;margin-top:4px">
+              <span>${tc?'收租收入（合計）':'Rental Income (combined)'}</span>
+              <span><span style="font-size:11px;opacity:.65">${hk(prevTd.income)} + ${hk(td.ownIncome)} = </span><strong style="color:var(--success)">${hk(td.income)}</strong></span>
+            </div>`
+          : `<div class="tax-row" style="font-size:13px;margin-top:4px">
+              <span>${tc?'收租收入':'Rental Income'}</span>
+              <strong style="color:var(--success)">${hk(td.income)}</strong>
+            </div>`;
+
+        // Combined total section (inside active tab only)
+        let combinedTotalHtml = '';
+        if (prevTd) {
+          combinedTotalHtml = `
+          <div style="border-top:2px solid ${color};margin-top:14px;padding-top:10px">
+            <div style="font-size:10px;font-weight:700;color:${color};text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">${tc?'合計':'Combined Total'}</div>
+            <div class="tax-row" style="font-size:12px;margin-bottom:4px">
+              <span style="color:var(--muted);white-space:nowrap">${tc?'淨收入':'Net Income'}</span>
+              <strong style="color:${nc}">${hk(td.netIncome)}</strong>
+            </div>
+            <div class="tax-row" style="font-size:12px">
+              <span style="color:var(--muted);white-space:nowrap">${tc?'稅後收入':'After-Tax Income'}</span>
+              <strong style="color:${ac}">${hk(td.afterTaxIncome)}</strong>
+            </div>
+          </div>`;
+        }
+
         return nameRow + `
           <div class="tax-row" style="font-size:13px">
             <span>${tc?'合約租金':'Contract Rent'}</span>
             <span><span style="font-size:11px;opacity:.6">${hk(td.rent)} × ${td.fyMonths}mo FY = </span><strong>${hk(td.contractRent)}</strong></span>
           </div>
-          <div class="tax-row" style="font-size:13px;margin-top:4px">
-            <span>${incomeLabel}</span>
-            <strong style="color:var(--success)">${hk(td.income)}</strong>
-          </div>
+          ${incomeRow}
           <div style="margin-top:10px;padding-top:8px;border-top:1px dashed var(--border)">
             <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px">${tc?'支出':'Expenses'}</div>
             ${er||`<div style="font-size:12px;color:var(--muted)">—</div>`}
@@ -2935,13 +2959,9 @@ async function renderSummary() {
               <span style="font-weight:700;font-size:14px">${tc?'稅後收入':'After-Tax Income'}</span>
               <strong style="color:${ac};font-size:18px">${hk(td.afterTaxIncome)}</strong>
             </div>
-          </div>`;
+          </div>
+          ${combinedTotalHtml}`;
       };
-
-      const cNet   = d.perTenantData.reduce((s, td) => s + td.netIncome, 0);
-      const cAfter = d.perTenantData.reduce((s, td) => s + td.afterTaxIncome, 0);
-      const cNC = cNet   >= 0 ? 'var(--success)' : 'var(--danger)';
-      const cAC = cAfter >= 0 ? 'var(--success)' : 'var(--danger)';
 
       return `
         <div id="${cardId}" style="background:#fff;border:1px solid ${color}30;border-top:3px solid ${color};border-radius:var(--radius);padding:16px 18px;display:flex;flex-direction:column">
@@ -2961,25 +2981,6 @@ async function renderSummary() {
           ${d.perTenantData.map((td, i) =>
             `<div class="stab-pane"${i > 0 ? ' style="display:none"' : ''}>${mkPane(td)}</div>`
           ).join('')}
-          <div style="border-top:2px solid ${color};margin-top:14px;padding-top:10px">
-            <div style="font-size:10px;font-weight:700;color:${color};text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">${tc?'合計':'Combined Total'}</div>
-            <div style="font-size:12px;margin-bottom:4px;display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:4px">
-              <span style="color:var(--muted);white-space:nowrap">${tc?'淨收入':'Net Income'}</span>
-              <span style="text-align:right">${d.perTenantData.map((td, i) => {
-                const cls = td.netIncome >= 0 ? 'var(--success)' : 'var(--danger)';
-                return (i > 0 ? '<span style="color:var(--muted)"> + </span>' : '') +
-                  `<span style="color:${cls}">${hk(td.netIncome)}</span><span style="color:var(--muted);font-size:10px"> (${escHtml(sn(td.tenantName))})</span>`;
-              }).join('')}<span style="color:var(--muted)"> = </span><strong style="color:${cNC}">${hk(cNet)}</strong></span>
-            </div>
-            <div style="font-size:12px;display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:4px">
-              <span style="color:var(--muted);white-space:nowrap">${tc?'稅後收入':'After-Tax Income'}</span>
-              <span style="text-align:right">${d.perTenantData.map((td, i) => {
-                const cls = td.afterTaxIncome >= 0 ? 'var(--success)' : 'var(--danger)';
-                return (i > 0 ? '<span style="color:var(--muted)"> + </span>' : '') +
-                  `<span style="color:${cls}">${hk(td.afterTaxIncome)}</span>`;
-              }).join('')}<span style="color:var(--muted)"> = </span><strong style="color:${cAC}">${hk(cAfter)}</strong></span>
-            </div>
-          </div>
         </div>`;
     }
 
