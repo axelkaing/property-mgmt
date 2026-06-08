@@ -2905,29 +2905,12 @@ async function renderSummary() {
         const incomeRow = prevTd
           ? `<div class="tax-row" style="font-size:13px;margin-top:4px">
               <span>${tc?'收租收入（合計）':'Rental Income (combined)'}</span>
-              <span><span style="font-size:11px;opacity:.65">${hk(prevTd.income)} + ${hk(td.ownIncome)} = </span><strong style="color:var(--success)">${hk(td.income)}</strong></span>
+              <strong style="color:var(--success)"><span style="font-size:11px;opacity:.65;font-weight:400">${hk(prevTd.income)} + ${hk(td.ownIncome)} = </span>${hk(td.income)}</strong>
             </div>`
           : `<div class="tax-row" style="font-size:13px;margin-top:4px">
               <span>${tc?'收租收入':'Rental Income'}</span>
               <strong style="color:var(--success)">${hk(td.income)}</strong>
             </div>`;
-
-        // Combined total section (inside active tab only)
-        let combinedTotalHtml = '';
-        if (prevTd) {
-          combinedTotalHtml = `
-          <div style="border-top:2px solid ${color};margin-top:14px;padding-top:10px">
-            <div style="font-size:10px;font-weight:700;color:${color};text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">${tc?'合計':'Combined Total'}</div>
-            <div class="tax-row" style="font-size:12px;margin-bottom:4px">
-              <span style="color:var(--muted);white-space:nowrap">${tc?'淨收入':'Net Income'}</span>
-              <strong style="color:${nc}">${hk(td.netIncome)}</strong>
-            </div>
-            <div class="tax-row" style="font-size:12px">
-              <span style="color:var(--muted);white-space:nowrap">${tc?'稅後收入':'After-Tax Income'}</span>
-              <strong style="color:${ac}">${hk(td.afterTaxIncome)}</strong>
-            </div>
-          </div>`;
-        }
 
         return nameRow + `
           <div class="tax-row" style="font-size:13px">
@@ -2959,8 +2942,7 @@ async function renderSummary() {
               <span style="font-weight:700;font-size:14px">${tc?'稅後收入':'After-Tax Income'}</span>
               <strong style="color:${ac};font-size:18px">${hk(td.afterTaxIncome)}</strong>
             </div>
-          </div>
-          ${combinedTotalHtml}`;
+          </div>`;
       };
 
       return `
