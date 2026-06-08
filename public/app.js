@@ -2547,6 +2547,93 @@ function computeUnitData(unit, year, raw) {
     .filter(p => allRoomTenantIds.has(p.tenant_id) && p.billing_month >= cyMStart && p.billing_month <= cyMEnd)
     .reduce((s, p) => s + p.amount, 0);
 
+  // Per-tenant figures for mid-year tenant change display
+  const tenantsInYear = roomTenants
+    .filter(t => overlapsYear(t))
+    .sort((a, b) => (b.active - a.active) || ((b.tenant_id || 0) - (a.tenant_id || 0)));
+
+  function computeTenantFigures(tenant) {
+    const csRaw = tenant.contract_start ? tenant.contract_start.slice(0, 7) : cyMStart;
+    const ceRaw = tenant.contract_end   ? tenant.contract_end.slice(0, 7)   : cyMEnd;
+    const startM = csRaw < cyMStart ? cyMStart : csRaw;
+    const endM   = ceRaw > cyMEnd   ? cyMEnd   : ceRaw;
+    const monthSet = new Set();
+    let cur = startM;
+    while (cur <= endM) {
+      monthSet.add(cur);
+      const [y2, m2] = cur.split('-').map(Number);
+      cur = m2 === 12 ? `${y2+1}-01` : `${y2}-${String(m2+1).padStart(2,'0')}`;
+    }
+    const tid = tenant.tenant_id ?? null;
+    const tPays = tid ? payments.filter(p => p.tenant_id === tid && monthSet.has(p.billing_month)) : [];
+    const tIncome = tPays.reduce((s, p) => s + p.amount, 0);
+    let tHandlingFee = 0;
+    if (!is4FSH) {
+      const hfTot = expenses.filter(e => e.category === 'handling_fee').reduce((s, r) => s + r.amount, 0);
+      tHandlingFee = hfTot * (monthSet.size / 12) / 13;
+    }
+    const tPropExpCats = new Set(['govt_rent','govt_rates','insurance','garbage','electricity','water']);
+    const tExpProp = {}, tExpPropDivSets = {};
+    for (const r of expenses.filter(e => e.property_id === property_id && tPropExpCats.has(e.category))) {
+      const ms = r.expense_date.slice(0, 7);
+      if (!monthSet.has(ms)) continue;
+      const cnt = Math.max(1, propOccupied[ms] || 1);
+      tExpProp[r.category] = (tExpProp[r.category] || 0) + r.amount / cnt;
+      if (!tExpPropDivSets[r.category]) tExpPropDivSets[r.category] = new Set();
+      tExpPropDivSets[r.category].add(cnt);
+    }
+    const tExpPropDivisors = {};
+    for (const [k, sv] of Object.entries(tExpPropDivSets)) tExpPropDivisors[k] = [...sv].sort((a,b)=>a-b);
+    const tUnitExpCats = new Set(['repairs','stamp_duty','other']);
+    const tExpUnit = {};
+    for (const r of expenses.filter(e => e.unit_label === unit && tUnitExpCats.has(e.category))) {
+      const ms = r.expense_date.slice(0, 7);
+      if (!monthSet.has(ms)) continue;
+      tExpUnit[r.category] = (tExpUnit[r.category] || 0) + r.amount;
+    }
+    const tExpShared = {}, tExpSharedDivisors = {};
+    const tSharedExclude = new Set(['handling_fee','govt_rent','govt_rates']);
+    for (const r of expenses.filter(e => e.property_id == null && e.is_shared === 1 && !tSharedExclude.has(e.category))) {
+      const ms = r.expense_date.slice(0, 7);
+      if (!monthSet.has(ms)) continue;
+      let su = [];
+      try { su = JSON.parse(r.shared_units || '[]'); } catch {}
+      if (su.length > 0 && su.includes(unit)) {
+        tExpShared[r.category] = (tExpShared[r.category] || 0) + r.amount / su.length;
+        if (su.length > 1) tExpSharedDivisors[r.category] = su.length;
+      }
+    }
+    let tGovtRates = 0;
+    for (const r of fyGovtRates.filter(e => e.property_id === property_id)) {
+      const ms = r.expense_date.slice(0, 7);
+      if (!monthSet.has(ms)) continue;
+      tGovtRates += r.amount / Math.max(1, propOccupied[ms] || 1);
+    }
+    const tExpTotal = {};
+    const tMerge = obj => { for (const [k, v] of Object.entries(obj)) tExpTotal[k] = (tExpTotal[k] || 0) + v; };
+    tMerge(tExpUnit); tMerge(tExpProp); tMerge(tExpShared);
+    if (tHandlingFee > 0) tExpTotal.handling_fee = tHandlingFee;
+    const tTotalExp  = Object.values(tExpTotal).reduce((s, v) => s + v, 0);
+    const tRent      = tenant.rent || 0;
+    const tCR        = tRent * 12;
+    const tNet       = tIncome - tTotalExp;
+    const tTaxBase   = Math.max(0, tCR - tGovtRates);
+    const tTax       = tTaxBase * 0.8 * 0.15;
+    const tAfter     = tNet - tTax;
+    return {
+      tenantName: tenant.name, startMonth: startM, endMonth: endM,
+      rent: tRent, contractRent: tCR, income: tIncome,
+      expProp: tExpProp, expPropDivisors: tExpPropDivisors,
+      expShared: tExpShared, expSharedDivisors: tExpSharedDivisors,
+      expUnit: tExpUnit, handlingFee: tHandlingFee,
+      expTotal: tExpTotal, totalExpenses: tTotalExp,
+      govtRates: tGovtRates, taxBase: tTaxBase, tax: tTax,
+      netIncome: tNet, afterTaxIncome: tAfter,
+    };
+  }
+
+  const perTenantData = tenantsInYear.length > 1 ? tenantsInYear.map(computeTenantFigures) : null;
+
   // Rule 1: handling_fee — ÷13, exclude 4F/SH
   const hfRows = expenses.filter(e => e.category === 'handling_fee');
   let handlingFee = 0;
@@ -2621,6 +2708,7 @@ function computeUnitData(unit, year, raw) {
     unit, year,
     tenantName: primaryTenant?.name || null,
     prevTenants,
+    perTenantData,
     rent,
     income,
     combinedIncome,
@@ -2693,7 +2781,121 @@ async function renderSummary() {
         ${unit} — failed to load
       </div>`;
 
-    // Divisor suffix per expense category
+    // ── Multi-tenant card (mid-year change) ──────────────────────────────────
+    if (d.perTenantData) {
+      const cardId = 'sum-' + unit.replace(/[^a-zA-Z0-9]/g, '-');
+
+      const sn = name => {
+        const p = (name || '').split(' ');
+        return (p.length > 1 && /^(Mr|Ms|Mrs|Dr)\.?$/i.test(p[0])) ? p[1] : p[0];
+      };
+
+      const mkPane = td => {
+        const dl = {};
+        catOrder.forEach(k => {
+          if (k === 'handling_fee') { dl[k] = '÷13'; return; }
+          if ((td.expShared[k]||0) > 0.005 && td.expSharedDivisors?.[k] > 1) { dl[k] = `÷${td.expSharedDivisors[k]}`; return; }
+          if ((td.expProp[k]||0) > 0.005) {
+            const divs = td.expPropDivisors?.[k];
+            if (divs?.length > 0 && divs[divs.length-1] > 1)
+              dl[k] = divs.length === 1 ? `÷${divs[0]}` : `÷${divs[0]}–${divs[divs.length-1]}`;
+          }
+        });
+        const er = catOrder.filter(k => (td.expTotal[k]||0) > 0.005).map(k => {
+          const dv = dl[k] ? ` <span style="font-size:11px;opacity:.6">(${dl[k]})</span>` : '';
+          return `<div class="tax-row" style="font-size:13px"><span style="color:var(--muted)">${catLabels[k]}${dv}</span><span>− ${hk(td.expTotal[k])}</span></div>`;
+        }).join('');
+        const sm = parseInt(td.startMonth.slice(5,7)), em = parseInt(td.endMonth.slice(5,7));
+        const per = sm === em ? MNAMES[sm-1] : `${MNAMES[sm-1]}–${MNAMES[em-1]}`;
+        const nc = td.netIncome >= 0 ? 'var(--success)' : 'var(--danger)';
+        const ac = td.afterTaxIncome >= 0 ? 'var(--success)' : 'var(--danger)';
+        return `
+          <div style="font-size:13px;color:var(--muted);margin-bottom:10px">
+            <strong style="color:var(--text)">${escHtml(td.tenantName||'—')}</strong>
+            <span style="font-size:11px;opacity:.7"> (${per})</span>
+          </div>
+          <div class="tax-row" style="font-size:13px">
+            <span>${tc?'合約租金':'Contract Rent'}</span>
+            <span><span style="font-size:11px;opacity:.6">${hk(td.rent)} × 12 = </span><strong>${hk(td.contractRent)}</strong></span>
+          </div>
+          <div class="tax-row" style="font-size:13px;margin-top:4px">
+            <span>${tc?'收租收入':'Rental Income'}</span>
+            <strong style="color:var(--success)">${hk(td.income)}</strong>
+          </div>
+          <div style="margin-top:10px;padding-top:8px;border-top:1px dashed var(--border)">
+            <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px">${tc?'支出':'Expenses'}</div>
+            ${er||`<div style="font-size:12px;color:var(--muted)">—</div>`}
+            <div class="tax-row" style="font-weight:600;font-size:12px;border-top:1px solid var(--border);margin-top:5px;padding-top:5px">
+              <span>${tc?'支出合計':'Total Expenses'}</span>
+              <span style="color:var(--danger)">− ${hk(td.totalExpenses)}</span>
+            </div>
+          </div>
+          <div style="border-top:1px solid var(--border);margin-top:10px;padding-top:10px">
+            <div class="tax-row" style="font-size:13px">
+              <span style="font-weight:700">${tc?'淨收入':'Net Income'}</span>
+              <strong style="color:${nc}">${hk(td.netIncome)}</strong>
+            </div>
+            <div style="margin-top:6px;padding:6px 8px;background:#f8fafc;border:1px solid var(--border);border-radius:5px;font-size:11px">
+              <div style="display:flex;justify-content:space-between;gap:8px">
+                <span style="color:var(--muted)">${tc?'估計物業稅':'Est. Property Tax'} <span style="opacity:.65">(FY, ${fyS}–${fyE})</span></span>
+                <span style="color:var(--danger);font-weight:600">− ${hk(td.tax)}</span>
+              </div>
+              <div style="margin-top:2px;color:var(--muted);opacity:.8">(${hk(td.contractRent)} − ${hk(td.govtRates)} rates) × 80% × 15% = ${hk(td.tax)}</div>
+            </div>
+            <div class="tax-row" style="margin-top:10px">
+              <span style="font-weight:700;font-size:14px">${tc?'稅後收入':'After-Tax Income'}</span>
+              <strong style="color:${ac};font-size:18px">${hk(td.afterTaxIncome)}</strong>
+            </div>
+          </div>`;
+      };
+
+      const cNet   = d.perTenantData.reduce((s, td) => s + td.netIncome, 0);
+      const cAfter = d.perTenantData.reduce((s, td) => s + td.afterTaxIncome, 0);
+      const cNC = cNet   >= 0 ? 'var(--success)' : 'var(--danger)';
+      const cAC = cAfter >= 0 ? 'var(--success)' : 'var(--danger)';
+
+      return `
+        <div id="${cardId}" style="background:#fff;border:1px solid ${color}30;border-top:3px solid ${color};border-radius:var(--radius);padding:16px 18px;display:flex;flex-direction:column">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;padding-bottom:10px;margin-bottom:10px;border-bottom:1px solid var(--border)">
+            <strong style="font-size:18px;color:${color};letter-spacing:-.3px;flex-shrink:0">${unit}</strong>
+            <span style="font-size:10px;font-weight:600;color:${color};background:${color}12;border:1px solid ${color}30;border-radius:4px;padding:2px 7px;white-space:nowrap;margin-top:3px">Calendar Year ${fy}: Jan–Dec</span>
+          </div>
+          <div style="display:flex;gap:4px;margin-bottom:12px">
+            ${d.perTenantData.map((td, i) => {
+              const label = escHtml(sn(td.tenantName));
+              const activeStyle = `background:${color};color:#fff;border-color:${color};font-weight:600`;
+              const inactiveStyle = 'background:#fff;color:var(--muted);border-color:var(--border)';
+              const initStyle = i === 0 ? activeStyle : inactiveStyle;
+              return `<button class="stab-btn" onclick="switchSummaryTab('${cardId}',${i})" data-active-style="${activeStyle}" data-inactive-style="${inactiveStyle}" style="flex:1;padding:5px 6px;font-size:12px;border:1px solid;border-radius:5px;cursor:pointer;${initStyle}">${label}</button>`;
+            }).join('')}
+          </div>
+          ${d.perTenantData.map((td, i) =>
+            `<div class="stab-pane"${i > 0 ? ' style="display:none"' : ''}>${mkPane(td)}</div>`
+          ).join('')}
+          <div style="border-top:2px solid ${color};margin-top:14px;padding-top:10px">
+            <div style="font-size:10px;font-weight:700;color:${color};text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">${tc?'合計':'Combined Total'}</div>
+            <div style="font-size:12px;margin-bottom:4px;display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:4px">
+              <span style="color:var(--muted);white-space:nowrap">${tc?'淨收入':'Net Income'}</span>
+              <span style="text-align:right">${d.perTenantData.map((td, i) => {
+                const cls = td.netIncome >= 0 ? 'var(--success)' : 'var(--danger)';
+                return (i > 0 ? '<span style="color:var(--muted)"> + </span>' : '') +
+                  `<span style="color:${cls}">${hk(td.netIncome)}</span><span style="color:var(--muted);font-size:10px"> (${escHtml(sn(td.tenantName))})</span>`;
+              }).join('')}<span style="color:var(--muted)"> = </span><strong style="color:${cNC}">${hk(cNet)}</strong></span>
+            </div>
+            <div style="font-size:12px;display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:4px">
+              <span style="color:var(--muted);white-space:nowrap">${tc?'稅後收入':'After-Tax Income'}</span>
+              <span style="text-align:right">${d.perTenantData.map((td, i) => {
+                const cls = td.afterTaxIncome >= 0 ? 'var(--success)' : 'var(--danger)';
+                return (i > 0 ? '<span style="color:var(--muted)"> + </span>' : '') +
+                  `<span style="color:${cls}">${hk(td.afterTaxIncome)}</span>`;
+              }).join('')}<span style="color:var(--muted)"> = </span><strong style="color:${cAC}">${hk(cAfter)}</strong></span>
+            </div>
+          </div>
+        </div>`;
+    }
+
+    // ── Single-tenant card (unchanged) ────────────────────────────────────────
+
     const divisorLabel = {};
     catOrder.forEach(k => {
       if (k === 'handling_fee') { divisorLabel[k] = '÷13'; return; }
@@ -2719,7 +2921,6 @@ async function renderSummary() {
         </div>`;
       }).join('');
 
-    // Months note — based on actual billing months with payments
     let incomeNote = '';
     if (d.incomeMonthCount > 0 && d.incomeMonthFirst && d.incomeMonthLast) {
       const sm = parseInt(d.incomeMonthFirst.slice(5, 7));
@@ -2736,22 +2937,14 @@ async function renderSummary() {
           <strong style="font-size:18px;color:${color};letter-spacing:-.3px;flex-shrink:0">${unit}</strong>
           <span style="font-size:10px;font-weight:600;color:${color};background:${color}12;border:1px solid ${color}30;border-radius:4px;padding:2px 7px;white-space:nowrap;margin-top:3px">Calendar Year ${fy}: Jan–Dec</span>
         </div>
-        <div style="font-size:13px;color:var(--muted);margin-bottom:12px">
-          ${tc ? '租客' : 'Tenant'}: <strong style="color:var(--text)">${d.tenantName || '—'}</strong>
-          ${(d.prevTenants && d.prevTenants.length > 0) ? d.prevTenants.map(pt => {
-            const sm = parseInt(pt.startMonth.slice(5, 7));
-            const em = parseInt(pt.endMonth.slice(5, 7));
-            const mStr = sm === em ? MNAMES[sm-1] : `${MNAMES[sm-1]}–${MNAMES[em-1]}`;
-            return `<br><span style="font-size:11px;color:var(--muted);opacity:.7">${escHtml(pt.name)} (${mStr})</span>`;
-          }).join('') : ''}
-        </div>
+        <div style="font-size:13px;color:var(--muted);margin-bottom:12px">${tc ? '租客' : 'Tenant'}: <strong style="color:var(--text)">${d.tenantName || '—'}</strong></div>
         <div class="tax-row" style="font-size:14px">
           <span>${tc ? '合約租金' : 'Contract Rent'}</span>
           <span><span style="font-size:11px;opacity:.6">${hk(d.rent)} × 12 = </span><strong>${hk(d.contractRent)}</strong></span>
         </div>
         <div class="tax-row" style="font-size:14px;margin-top:4px">
-          <span>${tc ? '收租收入' : 'Rental Income'}${(d.prevTenants && d.prevTenants.length > 0) ? '' : incomeNote}</span>
-          <strong style="color:var(--success)">${hk(d.combinedIncome ?? d.income)}</strong>
+          <span>${tc ? '收租收入' : 'Rental Income'}${incomeNote}</span>
+          <strong style="color:var(--success)">${hk(d.income)}</strong>
         </div>
         <div style="margin-top:12px;padding-top:10px;border-top:1px dashed var(--border)">
           <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">${tc ? '支出' : 'Expenses'}</div>
@@ -2875,6 +3068,16 @@ async function renderSummary() {
         </div>
       </div>
     </div>`;
+}
+
+function switchSummaryTab(cardId, idx) {
+  const card = document.getElementById(cardId);
+  if (!card) return;
+  card.querySelectorAll('.stab-btn').forEach((b, i) => {
+    const isActive = i === idx;
+    b.style.cssText = `flex:1;padding:5px 6px;font-size:12px;border:1px solid;border-radius:5px;cursor:pointer;${isActive ? b.dataset.activeStyle : b.dataset.inactiveStyle}`;
+  });
+  card.querySelectorAll('.stab-pane').forEach((p, i) => { p.style.display = i === idx ? '' : 'none'; });
 }
 
 async function loadUnitBreakdown() {
