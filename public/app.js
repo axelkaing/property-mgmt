@@ -187,6 +187,10 @@ const STRINGS = {
     water_meter:      'Meter',
     water_none:       'None',
     prev_tenants_lbl: 'Previous Tenants',
+    archive_tenant:   'Archive',
+    archive_confirm_msg: 'This will mark the tenant as moved out and set the room to Vacant.',
+    move_out_date_lbl: 'Move-Out Date',
+    archive_first_msg: 'Please archive the current tenant first.',
   },
   tc: {
     app_title: '物業管理',
@@ -374,6 +378,10 @@ const STRINGS = {
     water_meter:      '按錶',
     water_none:       '不包',
     prev_tenants_lbl: '前任租客',
+    archive_tenant:   '存檔',
+    archive_confirm_msg: '此操作將標記租客為已遷出，並將房間設為空置。',
+    move_out_date_lbl: '遷出日期',
+    archive_first_msg: '請先存檔現有租客。',
   },
 };
 
@@ -765,6 +773,7 @@ async function renderTenants() {
               <input type="file" accept=".pdf,.jpg,.jpeg,.png" style="display:none" onchange="uploadTenantContract(${u.tenant_id}, this)" />
             </label>
             <button class="btn btn-ghost btn-sm" onclick="openTenantEdit(${u.room_id})">✏ ${t('edit_tenant')}</button>
+            <button class="btn btn-danger btn-sm" onclick="openArchiveTenant(${u.tenant_id}, ${u.room_id})">📦 ${t('archive_tenant')}</button>
           ` : ''}
         </div>`}
       </div>`;
@@ -912,9 +921,41 @@ function togglePrevTenant(el) {
   el.querySelector('.pt-arrow').textContent = open ? '▸' : '▾';
 }
 
+function openArchiveTenant(tenantId, roomId) {
+  const u = window._tenantDirData[roomId];
+  const today = new Date().toISOString().slice(0, 10);
+  window._archiveTenantId = tenantId;
+  openModal(`📦 ${t('archive_tenant')} — ${escHtml(u?.name || '')}`, `
+    <div style="margin-bottom:16px">
+      <p style="color:var(--muted);font-size:13px">${t('archive_confirm_msg')}</p>
+    </div>
+    <div class="form-group">
+      <label>${t('move_out_date_lbl')}</label>
+      <input type="date" id="archive-moveout-date" value="${today}" />
+    </div>
+    <div class="modal-actions">
+      <button type="button" class="btn btn-ghost" onclick="closeModal()">${t('cancel')}</button>
+      <button type="button" class="btn btn-danger" onclick="confirmArchiveTenant()">📦 ${t('archive_tenant')}</button>
+    </div>`);
+}
+
+async function confirmArchiveTenant() {
+  const tenantId = window._archiveTenantId;
+  const moveOutDate = $$('archive-moveout-date').value;
+  if (!moveOutDate) { alert('Please enter a move-out date.'); return; }
+  try {
+    await api.put(`/api/tenants/${tenantId}/archive`, { contract_end: moveOutDate });
+    closeModal();
+    await renderTenants();
+  } catch (err) {
+    alert('Archive failed: ' + err.message);
+  }
+}
+
 function openAddTenant(roomId) {
   const u = window._tenantDirData[roomId];
   if (!u) return;
+  if (u.tenant_id) { alert(t('archive_first_msg')); return; }
   window._addTenantRoom = roomId;
   openModal(`+ ${t('add_tenant')} — ${fmtUnit(u.property_code, u.room_label)}`, `
     <form id="add-tenant-form" onsubmit="saveNewTenant(event)">
@@ -3384,6 +3425,13 @@ window.uploadTenantContract = uploadTenantContract;
 window.viewTenantContract   = viewTenantContract;
 window.openTenantEdit       = openTenantEdit;
 window.saveTenantEdit       = saveTenantEdit;
+window.openArchiveTenant    = openArchiveTenant;
+window.confirmArchiveTenant = confirmArchiveTenant;
+window.togglePrevTenant     = togglePrevTenant;
+window.openAddTenant        = openAddTenant;
+window.saveNewTenant        = saveNewTenant;
+window.toggleAddTenantWaterRate = toggleAddTenantWaterRate;
+window.deleteTenantContract = deleteTenantContract;
 window.S                  = S;
 
 // ── Init ─────────────────────────────────────────────────────────────────────

@@ -352,6 +352,7 @@ async function route(req, res, path, url) {
   if (!isAdmin) return sendErr(res, 'Forbidden', 403);
 
   if (path === '/api/tenants'               && m === 'POST')   return createTenant(req, res);
+  if (/^\/api\/tenants\/\d+\/archive$/.test(path) && m === 'PUT') return archiveTenant(req, res, seg(path, 3));
   if (/^\/api\/tenants\/\d+$/.test(path)   && m === 'PUT')    return updateTenant(req, res, seg(path, 3));
   if (/^\/api\/contracts\/\d+$/.test(path) && m === 'POST')   return uploadContract(req, res, seg(path, 3));
   if (/^\/api\/contracts\/\d+$/.test(path) && m === 'DELETE') return deleteContract(res, seg(path, 3));
@@ -488,6 +489,19 @@ async function updateTenant(req, res, id) {
           d.contract_start, d.contract_end, d.deposit, d.commission,
           d.phone || null, d.remark || null, id)
     .run();
+  return sendJson(res, { success: true });
+}
+
+async function archiveTenant(req, res, id) {
+  const d = req.body || {};
+  const moveOutDate = d.contract_end || new Date().toISOString().slice(0, 10);
+
+  const tenant = await DB.prepare(`SELECT room_id FROM tenants WHERE id=? AND active=1`).bind(id).first();
+  if (!tenant) return sendErr(res, 'Active tenant not found', 404);
+
+  await DB.prepare(`UPDATE tenants SET active=0, contract_end=? WHERE id=?`).bind(moveOutDate, id).run();
+  await DB.prepare(`UPDATE rooms SET status='vacant' WHERE id=?`).bind(tenant.room_id).run();
+
   return sendJson(res, { success: true });
 }
 
