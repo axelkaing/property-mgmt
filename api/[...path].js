@@ -823,7 +823,11 @@ async function createBilling(req, res) {
 
   await DB.prepare(`
     UPDATE tenants SET outstanding_balance = (
-      COALESCE((SELECT SUM(mr.total_bill) FROM meter_readings mr WHERE mr.room_id = tenants.room_id), 0)
+      COALESCE((SELECT SUM(mr.total_bill) FROM meter_readings mr
+        WHERE mr.room_id = tenants.room_id
+          AND (tenants.contract_start IS NULL OR mr.billing_month >= SUBSTR(tenants.contract_start, 1, 7))
+          AND (tenants.contract_end IS NULL OR mr.billing_month <= SUBSTR(tenants.contract_end, 1, 7))
+      ), 0)
       - COALESCE((SELECT SUM(p.amount) FROM payments p WHERE p.tenant_id = tenants.id), 0)
     ) WHERE id=?`).bind(tenant.id).run();
 
@@ -950,6 +954,8 @@ async function getBillingPage(res, url) {
             WHERE mr2.room_id = mr.room_id
               AND mr2.billing_month <= mr.billing_month
               AND mr2.billing_month >= '${fyStart}'
+              AND (t.contract_start IS NULL OR mr2.billing_month >= SUBSTR(t.contract_start, 1, 7))
+              AND (t.contract_end IS NULL OR mr2.billing_month <= SUBSTR(t.contract_end, 1, 7))
           ), 0) - COALESCE((SELECT SUM(pay2.amount) FROM payments pay2
             WHERE pay2.tenant_id = t.id
               AND pay2.billing_month IS NOT NULL
@@ -962,6 +968,8 @@ async function getBillingPage(res, url) {
             WHERE mr2.room_id = mr.room_id
               AND mr2.billing_month < mr.billing_month
               AND mr2.billing_month >= '${fyStart}'
+              AND (t.contract_start IS NULL OR mr2.billing_month >= SUBSTR(t.contract_start, 1, 7))
+              AND (t.contract_end IS NULL OR mr2.billing_month <= SUBSTR(t.contract_end, 1, 7))
           ), 0) - COALESCE((SELECT SUM(pay2.amount) FROM payments pay2
             WHERE pay2.tenant_id = t.id
               AND pay2.billing_month IS NOT NULL
@@ -970,7 +978,10 @@ async function getBillingPage(res, url) {
           ), 0)
         ELSE 0 END as prev_balance,
         (SELECT MAX(mr2.billing_month) FROM meter_readings mr2
-          WHERE mr2.room_id = mr.room_id AND mr2.billing_month < mr.billing_month) as prev_billing_month
+          WHERE mr2.room_id = mr.room_id AND mr2.billing_month < mr.billing_month
+            AND (t.contract_start IS NULL OR mr2.billing_month >= SUBSTR(t.contract_start, 1, 7))
+            AND (t.contract_end IS NULL OR mr2.billing_month <= SUBSTR(t.contract_end, 1, 7))
+        ) as prev_billing_month
       FROM meter_readings mr
       JOIN rooms r ON r.id = mr.room_id
       JOIN properties p ON p.id = r.property_id
