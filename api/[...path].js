@@ -984,25 +984,35 @@ async function getBillingPage(res, url) {
         )`).bind(safeMonth, safeMonth).all(),
 
     DB.prepare(`
-      SELECT t.room_id,
+      SELECT t.id as tenant_id, t.room_id,
         (SELECT MIN(mr2.billing_month) FROM meter_readings mr2
-          WHERE mr2.room_id = t.room_id) as first_billing_month,
+          WHERE mr2.room_id = t.room_id
+            AND (t.contract_start IS NULL OR mr2.billing_month >= SUBSTR(t.contract_start, 1, 7))
+            AND (t.contract_end IS NULL OR mr2.billing_month <= SUBSTR(t.contract_end, 1, 7))
+        ) as first_billing_month,
         (SELECT MAX(mr2.billing_month) FROM meter_readings mr2
           WHERE mr2.room_id = t.room_id
             AND mr2.billing_month < ?
-            AND mr2.billing_month >= ?) as prev_billing_month_raw,
+            AND mr2.billing_month >= ?
+            AND (t.contract_start IS NULL OR mr2.billing_month >= SUBSTR(t.contract_start, 1, 7))
+            AND (t.contract_end IS NULL OR mr2.billing_month <= SUBSTR(t.contract_end, 1, 7))
+        ) as prev_billing_month_raw,
         COALESCE((SELECT SUM(mr2.total_bill) FROM meter_readings mr2
           WHERE mr2.room_id = t.room_id
             AND mr2.billing_month < ?
-            AND mr2.billing_month >= ?), 0)
+            AND mr2.billing_month >= ?
+            AND (t.contract_start IS NULL OR mr2.billing_month >= SUBSTR(t.contract_start, 1, 7))
+            AND (t.contract_end IS NULL OR mr2.billing_month <= SUBSTR(t.contract_end, 1, 7))
+        ), 0)
         - COALESCE((SELECT SUM(p.amount) FROM payments p
           WHERE p.tenant_id = t.id
             AND p.billing_month IS NOT NULL
             AND p.billing_month < ?
             AND p.billing_month >= ?), 0) as prev_outstanding_raw
       FROM tenants t
-      WHERE t.active = 1`
-    ).bind(safeMonth, fyStart, safeMonth, fyStart, safeMonth, fyStart).all(),
+      WHERE (t.contract_start IS NULL OR SUBSTR(t.contract_start, 1, 7) <= ?)
+        AND (t.contract_end IS NULL OR SUBSTR(t.contract_end, 1, 7) >= ?)`
+    ).bind(safeMonth, fyStart, safeMonth, fyStart, safeMonth, fyStart, safeMonth, safeMonth).all(),
   ]);
 
   const lastReadings = {};
