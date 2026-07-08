@@ -96,6 +96,7 @@ async function ensureSchema() {
     `ALTER TABLE properties ADD COLUMN sort_order INTEGER DEFAULT 99`,
     `ALTER TABLE expenses ADD COLUMN is_shared INTEGER DEFAULT 0`,
     `ALTER TABLE expenses ADD COLUMN shared_units TEXT`,
+    `ALTER TABLE properties ADD COLUMN hidden INTEGER DEFAULT 0`,
   ];
   for (const sql of migrations) {
     try { await d1Query(sql); } catch { /* column already exists */ }
@@ -312,6 +313,28 @@ async function ensureSchema() {
       await DB.prepare(`INSERT OR REPLACE INTO _schema_flags (key,value) VALUES ('bank_acct_4fks_v1','1')`).run();
     }
   } catch { /* ignore */ }
+
+  try {
+    const flagH = await DB.prepare(`SELECT value FROM _schema_flags WHERE key='prop_4fsh_hide_v1'`).first();
+    if (!flagH) {
+      await DB.prepare(`UPDATE properties SET sort_order=99 WHERE code='4F/SH'`).run();
+      await DB.prepare(`UPDATE properties SET hidden=1 WHERE code='4F/SH'`).run();
+      await DB.prepare(`INSERT OR REPLACE INTO _schema_flags (key,value) VALUES ('prop_4fsh_hide_v1','1')`).run();
+    }
+  } catch { /* ignore */ }
+
+  const indexes = [
+    `CREATE INDEX IF NOT EXISTS idx_tenants_room_id ON tenants(room_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_tenants_active ON tenants(active)`,
+    `CREATE INDEX IF NOT EXISTS idx_rooms_property_id ON rooms(property_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_meter_readings_room_id ON meter_readings(room_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_meter_readings_billing_month ON meter_readings(billing_month)`,
+    `CREATE INDEX IF NOT EXISTS idx_payments_tenant_id ON payments(tenant_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_payments_billing_month ON payments(billing_month)`,
+  ];
+  for (const sql of indexes) {
+    try { await d1Query(sql); } catch { /* already exists */ }
+  }
 }
 
 // ── Router ────────────────────────────────────────────────────────────────────
@@ -395,6 +418,7 @@ async function dashboard(res, url) {
         SUM(CASE WHEN r.status='occupied' THEN 1 ELSE 0 END) as occupied,
         SUM(CASE WHEN r.status='vacant'   THEN 1 ELSE 0 END) as vacant
       FROM properties p LEFT JOIN rooms r ON r.property_id = p.id
+      WHERE (p.hidden=0 OR p.hidden IS NULL)
       GROUP BY p.id ORDER BY p.sort_order, p.id`).all(),
 
     DB.prepare(`
@@ -420,6 +444,7 @@ async function dashboard(res, url) {
       LEFT JOIN tenants t ON t.room_id = r.id AND (t.active = 1 OR (t.active = 0 AND t.contract_end >= ?))
       LEFT JOIN meter_readings mr ON mr.room_id = r.id AND mr.billing_month = ?
       LEFT JOIN properties prop ON prop.id = r.property_id
+      WHERE (prop.hidden=0 OR prop.hidden IS NULL)
       ORDER BY prop.sort_order, prop.id, r.room_label`).bind(currentMonth, currentMonth, fyStart, currentMonth, fyStart, currentMonth, currentMonth).all(),
 
     DB.prepare(`
@@ -460,7 +485,7 @@ async function dashboard(res, url) {
 // ── Properties ────────────────────────────────────────────────────────────────
 
 async function getProperties(res) {
-  const rows = await DB.prepare(`SELECT * FROM properties ORDER BY sort_order, id`).all();
+  const rows = await DB.prepare(`SELECT * FROM properties WHERE (hidden=0 OR hidden IS NULL) ORDER BY sort_order, id`).all();
   return sendJson(res, rows.results);
 }
 
@@ -469,11 +494,12 @@ async function getProperties(res) {
 async function getTenants(res, url) {
   const roomId = url.searchParams.get('room_id');
   const query = roomId
-    ? DB.prepare(`SELECT t.*, r.room_label, p.code as property_code FROM tenants t JOIN rooms r ON r.id=t.room_id JOIN properties p ON p.id=r.property_id WHERE t.room_id=? ORDER BY t.id`).bind(roomId)
+    ? DB.prepare(`SELECT t.*, r.room_label, p.code as property_code FROM tenants t JOIN rooms r ON r.id=t.room_id JOIN properties p ON p.id=r.property_id WHERE t.room_id=? AND (p.hidden=0 OR p.hidden IS NULL) ORDER BY t.id`).bind(roomId)
     : DB.prepare(`SELECT t.*, r.room_label, r.property_id, p.code as property_code,
         (SELECT MAX(mr.billing_month) FROM meter_readings mr WHERE mr.room_id = t.room_id) as last_billing_month
       FROM tenants t JOIN rooms r ON r.id=t.room_id JOIN properties p ON p.id=r.property_id
       WHERE (t.active=1 OR (t.active=0 AND t.contract_end >= date('now', '-6 months')))
+        AND (p.hidden=0 OR p.hidden IS NULL)
       ORDER BY p.sort_order, p.id, r.room_label`);
   const rows = await query.all();
   return sendJson(res, rows.results);
@@ -509,30 +535,55 @@ async function getTenantsDirectory(res) {
   const rows = await DB.prepare(`
     SELECT r.id as room_id, r.room_label, r.status,
       p.id as property_id, p.code as property_code,
-      t.id as tenant_id, t.name, t.phone, t.rent, t.deposit,
+      t.id as tenant_id, t.active as tenant_active,
+      t.name, t.phone, t.rent, t.deposit,
       t.contract_start, t.contract_end, t.remark, t.contract_url,
       t.elec_rate, t.water_type, t.water_rate, t.commission
     FROM rooms r
     JOIN properties p ON p.id = r.property_id
-    LEFT JOIN tenants t ON t.room_id = r.id AND t.active = 1
-    ORDER BY p.sort_order, p.id, r.room_label`).all();
+    LEFT JOIN tenants t ON t.room_id = r.id
+    WHERE (p.hidden=0 OR p.hidden IS NULL)
+    ORDER BY p.sort_order, p.id, r.room_label,
+      CASE WHEN t.active = 1 THEN 0 ELSE 1 END,
+      t.contract_end DESC`).all();
 
-  const prevRows = await DB.prepare(`
-    SELECT room_id, id as tenant_id, name, phone, rent, deposit, remark, contract_start, contract_end
-    FROM tenants WHERE active = 0
-    ORDER BY contract_end DESC`).all();
-
-  const prevByRoom = {};
-  for (const r of prevRows.results) {
-    if (!prevByRoom[r.room_id]) prevByRoom[r.room_id] = [];
-    prevByRoom[r.room_id].push(r);
+  const roomMap = new Map();
+  for (const row of rows.results) {
+    if (!roomMap.has(row.room_id)) {
+      roomMap.set(row.room_id, {
+        room_id: row.room_id, room_label: row.room_label, status: row.status,
+        property_id: row.property_id, property_code: row.property_code,
+        tenant_id: null, name: null, phone: null, rent: null, deposit: null,
+        contract_start: null, contract_end: null, remark: null, contract_url: null,
+        elec_rate: null, water_type: null, water_rate: null, commission: null,
+        prev_tenants: [],
+      });
+    }
+    if (row.tenant_id == null) continue;
+    const room = roomMap.get(row.room_id);
+    if (row.tenant_active === 1) {
+      room.tenant_id      = row.tenant_id;
+      room.name           = row.name;
+      room.phone          = row.phone;
+      room.rent           = row.rent;
+      room.deposit        = row.deposit;
+      room.contract_start = row.contract_start;
+      room.contract_end   = row.contract_end;
+      room.remark         = row.remark;
+      room.contract_url   = row.contract_url;
+      room.elec_rate      = row.elec_rate;
+      room.water_type     = row.water_type;
+      room.water_rate     = row.water_rate;
+      room.commission     = row.commission;
+    } else {
+      room.prev_tenants.push({
+        room_id: row.room_id, tenant_id: row.tenant_id,
+        name: row.name, phone: row.phone, rent: row.rent, deposit: row.deposit,
+        remark: row.remark, contract_start: row.contract_start, contract_end: row.contract_end,
+      });
+    }
   }
-
-  const result = rows.results.map(r => ({
-    ...r,
-    prev_tenants: prevByRoom[r.room_id] || [],
-  }));
-  return sendJson(res, result);
+  return sendJson(res, [...roomMap.values()]);
 }
 
 async function createTenant(req, res) {
@@ -694,7 +745,9 @@ async function getBilling(res, url) {
     FROM meter_readings mr
     JOIN rooms r ON r.id = mr.room_id
     JOIN properties p ON p.id = r.property_id
-    LEFT JOIN tenants t ON t.room_id = mr.room_id AND t.active = 1
+    LEFT JOIN tenants t ON t.room_id = mr.room_id
+      AND (t.contract_start IS NULL OR SUBSTR(t.contract_start, 1, 7) <= mr.billing_month)
+      AND (t.contract_end IS NULL OR SUBSTR(t.contract_end, 1, 7) >= mr.billing_month)
     ${where}
     ORDER BY mr.billing_month DESC, p.sort_order, p.id, r.room_label`).all();
   return sendJson(res, rows.results);
@@ -871,10 +924,11 @@ async function getBillingPage(res, url) {
       FROM tenants t
       JOIN rooms r ON r.id = t.room_id
       JOIN properties p ON p.id = r.property_id
-      WHERE (t.active = 1 OR (t.active = 0 AND t.contract_end >= date('now', '-6 months')))
+      WHERE t.active = 1
+        AND (p.hidden=0 OR p.hidden IS NULL)
       ORDER BY p.sort_order, p.id, r.room_label`).all(),
 
-    DB.prepare(`SELECT * FROM properties ORDER BY sort_order, id`).all(),
+    DB.prepare(`SELECT * FROM properties WHERE (hidden=0 OR hidden IS NULL) ORDER BY sort_order, id`).all(),
 
     DB.prepare(`
       SELECT mr.*, r.room_label, r.property_id, p.code as property_code,
@@ -912,8 +966,11 @@ async function getBillingPage(res, url) {
       FROM meter_readings mr
       JOIN rooms r ON r.id = mr.room_id
       JOIN properties p ON p.id = r.property_id
-      LEFT JOIN tenants t ON t.room_id = mr.room_id AND t.active = 1
+      LEFT JOIN tenants t ON t.room_id = mr.room_id
+        AND (t.contract_start IS NULL OR SUBSTR(t.contract_start, 1, 7) <= mr.billing_month)
+        AND (t.contract_end IS NULL OR SUBSTR(t.contract_end, 1, 7) >= mr.billing_month)
       WHERE mr.billing_month = '${safeMonth}'
+        AND (p.hidden=0 OR p.hidden IS NULL)
       ORDER BY p.sort_order, p.id, r.room_label`).all(),
 
     DB.prepare(`
@@ -943,7 +1000,7 @@ async function getBillingPage(res, url) {
             AND p.billing_month < ?
             AND p.billing_month >= ?), 0) as prev_outstanding_raw
       FROM tenants t
-      WHERE (t.active = 1 OR (t.active = 0 AND t.contract_end >= date('now', '-6 months')))`
+      WHERE t.active = 1`
     ).bind(safeMonth, fyStart, safeMonth, fyStart, safeMonth, fyStart).all(),
   ]);
 
@@ -1070,9 +1127,10 @@ async function getPaymentsPage(res, url) {
       JOIN rooms r ON r.id = t.room_id
       JOIN properties p ON p.id = r.property_id
       WHERE (t.active = 1 OR (t.active = 0 AND t.contract_end >= date('now', '-6 months')))
+        AND (p.hidden=0 OR p.hidden IS NULL)
       ORDER BY p.sort_order, p.id, r.room_label`).all(),
 
-    DB.prepare(`SELECT * FROM properties ORDER BY sort_order, id`).all(),
+    DB.prepare(`SELECT * FROM properties WHERE (hidden=0 OR hidden IS NULL) ORDER BY sort_order, id`).all(),
 
     DB.prepare(`SELECT COALESCE(SUM(amount),0) as total FROM payments`).first(),
   ]);
@@ -1205,7 +1263,7 @@ async function getExpensesPage(res, url) {
       ${where}
       ORDER BY e.expense_date DESC, e.id DESC`).bind(...binds).all(),
 
-    DB.prepare(`SELECT * FROM properties ORDER BY sort_order, id`).all(),
+    DB.prepare(`SELECT * FROM properties WHERE (hidden=0 OR hidden IS NULL) ORDER BY sort_order, id`).all(),
 
     DB.prepare(`SELECT COALESCE(SUM(amount),0) as total FROM expenses`).first(),
   ]);
@@ -1459,14 +1517,14 @@ async function getSummaryUnit(res, url) {
 
     // Rule 3: unit-specific categories — summed by category
     DB.prepare(`SELECT category, COALESCE(SUM(amount),0) as total FROM expenses
-      WHERE unit_label=? AND category IN ('repairs','stamp_duty','other')
+      WHERE unit_label=? AND category IN ('repairs','stamp_duty','other','agent_fee')
         AND expense_date>=? AND expense_date<=? GROUP BY category`)
       .bind(unit, cyDStart, cyDEnd).all(),
 
     // Rule 4: general shared (no property, is_shared=1) — exclude categories handled by Rules 1 & 2
     DB.prepare(`SELECT category, amount, shared_units FROM expenses
       WHERE property_id IS NULL AND is_shared=1
-        AND category NOT IN ('handling_fee','govt_rent','govt_rates')
+        AND category NOT IN ('handling_fee','agent_fee','govt_rent','govt_rates')
         AND expense_date>=? AND expense_date<=?`)
       .bind(cyDStart, cyDEnd).all(),
 
@@ -1581,6 +1639,7 @@ async function getSummaryAll(res, url) {
         p.code as property_code, p.sort_order
       FROM rooms r
       JOIN properties p ON p.id = r.property_id
+      WHERE (p.hidden=0 OR p.hidden IS NULL)
       ORDER BY p.sort_order, p.id, r.room_label`).all(),
 
     DB.prepare(`

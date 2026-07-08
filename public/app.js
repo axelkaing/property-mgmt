@@ -112,7 +112,8 @@ const STRINGS = {
     cat_insurance:    'Insurance',
     cat_govt_rates:   'Rating & Valuation (差餉)',
     cat_govt_rent:    'Govt Rent (地租)',
-    cat_handling_fee: 'Handling / Agent Fee',
+    cat_handling_fee: 'Handling Fee',
+    cat_agent_fee:    'Agent Fee',
     cat_electricity:  'Electricity',
     cat_water:        'Water',
     cat_garbage:      'Garbage',
@@ -303,7 +304,8 @@ const STRINGS = {
     cat_insurance:    '保險',
     cat_govt_rates:   '差餉',
     cat_govt_rent:    '地租',
-    cat_handling_fee: '代理費 / 手續費',
+    cat_handling_fee: '管理費',
+    cat_agent_fee:    '代理費',
     cat_electricity:  '電費',
     cat_water:        '水費',
     cat_garbage:      '垃圾費',
@@ -477,7 +479,7 @@ function catLabel(c) {
   const map = {
     repairs: t('cat_repairs'), insurance: t('cat_insurance'),
     govt_rates: t('cat_govt_rates'), govt_rent: t('cat_govt_rent'),
-    handling_fee: t('cat_handling_fee'), stamp_duty: t('cat_stamp_duty'),
+    handling_fee: t('cat_handling_fee'), agent_fee: t('cat_agent_fee'), stamp_duty: t('cat_stamp_duty'),
     electricity: t('cat_electricity'), water: t('cat_water'),
     garbage: t('cat_garbage'), svc_mgmt: t('cat_svc_mgmt'), other: t('cat_other'),
   };
@@ -1159,7 +1161,7 @@ async function renderBilling() {
       <div class="billing-unit-card" id="bc-${t_.room_id}">
         <div class="billing-unit-header">
           <span class="billing-badge">${fmtUnit(t_.property_code, t_.room_label)}</span>
-          <span class="billing-tenant-name">${t_.name}</span>
+          <span class="billing-tenant-name">${ex.tenant_name || t_.name}</span>
           <span class="billing-rent">${hk(t_.rent)}/mo</span>
           ${t_.commission > 0 ? `<span class="badge badge-amber" title="${t('commission_lbl')}">−${hk(t_.commission)}</span>` : ''}
         </div>
@@ -2036,7 +2038,7 @@ async function renderExpenses() {
     { label: '3F/KC', children: ['3F/KC-A', '3F/KC-B', '3F/KC-C'] },
     { label: '4F/KS', children: ['4F/KS-A', '4F/KS-B', '4F/KS-C', '4F/KS-D', '4F/KS-E'] },
   ];
-  const FLAT_UNITS = ['4F/SH', '5F/SH', 'CarP P99', 'General'];
+  const FLAT_UNITS = ['5F/SH', 'CarP P99', 'General'];
   const unitOptions = [
     ...PROP_TREE.map(g => `<optgroup label="${g.label}">
       <option value="${g.label}" ${expUnit === g.label ? 'selected' : ''}>${g.label}</option>
@@ -2175,6 +2177,7 @@ async function renderExpenses() {
         <option value="insurance"    ${expCat==='insurance'    ?'selected':''}>${t('cat_insurance')}</option>
         <option value="stamp_duty"   ${expCat==='stamp_duty'   ?'selected':''}>${t('cat_stamp_duty')}</option>
         <option value="handling_fee" ${expCat==='handling_fee' ?'selected':''}>${t('cat_handling_fee')}</option>
+        <option value="agent_fee"    ${expCat==='agent_fee'    ?'selected':''}>${t('cat_agent_fee')}</option>
         <option value="electricity"  ${expCat==='electricity'  ?'selected':''}>${t('cat_electricity')}</option>
         <option value="water"        ${expCat==='water'        ?'selected':''}>${t('cat_water')}</option>
         <option value="garbage"      ${expCat==='garbage'      ?'selected':''}>${t('cat_garbage')}</option>
@@ -2271,6 +2274,7 @@ function showAddExpense() {
               <option value="insurance">${t('cat_insurance')}</option>
               <option value="stamp_duty">${t('cat_stamp_duty')}</option>
               <option value="handling_fee">${t('cat_handling_fee')}</option>
+              <option value="agent_fee">${t('cat_agent_fee')}</option>
               <option value="electricity">${t('cat_electricity')}</option>
               <option value="water">${t('cat_water')}</option>
               <option value="garbage">${t('cat_garbage')}</option>
@@ -2405,6 +2409,7 @@ function editExpense(id) {
             <option value="insurance"    ${e.category==='insurance'    ? 'selected':''} >${t('cat_insurance')}</option>
             <option value="stamp_duty"   ${e.category==='stamp_duty'   ? 'selected':''} >${t('cat_stamp_duty')}</option>
             <option value="handling_fee" ${e.category==='handling_fee' ? 'selected':''} >${t('cat_handling_fee')}</option>
+            <option value="agent_fee"    ${e.category==='agent_fee'    ? 'selected':''} >${t('cat_agent_fee')}</option>
             <option value="electricity"  ${e.category==='electricity'  ? 'selected':''} >${t('cat_electricity')}</option>
             <option value="water"        ${e.category==='water'        ? 'selected':''} >${t('cat_water')}</option>
             <option value="garbage"      ${e.category==='garbage'      ? 'selected':''} >${t('cat_garbage')}</option>
@@ -2680,7 +2685,7 @@ function computeUnitData(unit, year, raw) {
     }
     const tExpPropDivisors = {};
     for (const [k, sv] of Object.entries(tExpPropDivSets)) tExpPropDivisors[k] = [...sv].sort((a,b)=>a-b);
-    const tUnitExpCats = new Set(['repairs','stamp_duty','other']);
+    const tUnitExpCats = new Set(['repairs','stamp_duty','other','agent_fee']);
     const tExpUnit = {};
     for (const r of expenses.filter(e => e.unit_label === unit && tUnitExpCats.has(e.category))) {
       const ms = r.expense_date.slice(0, 7);
@@ -2688,7 +2693,7 @@ function computeUnitData(unit, year, raw) {
       tExpUnit[r.category] = (tExpUnit[r.category] || 0) + r.amount;
     }
     const tExpShared = {}, tExpSharedDivisors = {};
-    const tSharedExclude = new Set(['handling_fee','govt_rent','govt_rates']);
+    const tSharedExclude = new Set(['handling_fee','agent_fee','govt_rent','govt_rates']);
     for (const r of expenses.filter(e => e.property_id == null && e.is_shared === 1 && !tSharedExclude.has(e.category))) {
       const ms = r.expense_date.slice(0, 7);
       if (!monthSet.has(ms)) continue;
@@ -2780,7 +2785,7 @@ function computeUnitData(unit, year, raw) {
   for (const [k, s] of Object.entries(expPropDivSets)) expPropDivisors[k] = [...s].sort((a, b) => a - b);
 
   // Rule 3: unit-specific categories — 100% assigned
-  const unitExpCats = new Set(['repairs','stamp_duty','other']);
+  const unitExpCats = new Set(['repairs','stamp_duty','other','agent_fee']);
   const expUnit = {};
   for (const r of expenses.filter(e => e.unit_label === unit && unitExpCats.has(e.category))) {
     expUnit[r.category] = (expUnit[r.category] || 0) + r.amount;
@@ -2788,7 +2793,7 @@ function computeUnitData(unit, year, raw) {
 
   // Rule 4: general shared (no property, is_shared=1)
   const expShared = {}, expSharedDivisors = {};
-  const sharedExclude = new Set(['handling_fee','govt_rent','govt_rates']);
+  const sharedExclude = new Set(['handling_fee','agent_fee','govt_rent','govt_rates']);
   for (const r of expenses.filter(e => e.property_id == null && e.is_shared === 1 && !sharedExclude.has(e.category))) {
     let units = [];
     try { units = JSON.parse(r.shared_units || '[]'); } catch {}
@@ -2861,7 +2866,7 @@ async function renderSummary() {
     `<div style="padding:40px;text-align:center;color:var(--muted);font-size:14px">Loading…</div>`;
 
   const SHARED_UNITS = ['2F/WS-A', '2F/WS-B', '2F/WS-C', '3F/KC-A', '3F/KC-B', '3F/KC-C'];
-  const INDIV_UNITS  = ['4F/KS-A', '4F/KS-B', '4F/KS-C', '4F/KS-D', '4F/KS-E', '4F/SH', '5F/SH', 'CarP P99'];
+  const INDIV_UNITS  = ['4F/KS-A', '4F/KS-B', '4F/KS-C', '4F/KS-D', '4F/KS-E', '5F/SH', 'CarP P99'];
   const ALL_UNITS    = [...SHARED_UNITS, ...INDIV_UNITS];
 
   const raw = await api.get(`/api/summary-all?year=${fy}`);
@@ -2875,12 +2880,13 @@ async function renderSummary() {
     insurance:    t('less_insurance'),
     stamp_duty:   t('less_stamp_duty'),
     handling_fee: t('cat_handling_fee'),
+    agent_fee:    t('cat_agent_fee'),
     electricity:  t('cat_electricity'),
     water:        t('cat_water'),
     garbage:      t('cat_garbage'),
     other:        t('cat_other'),
   };
-  const catOrder = ['govt_rent','govt_rates','repairs','insurance','stamp_duty','handling_fee','electricity','water','garbage','other'];
+  const catOrder = ['govt_rent','govt_rates','repairs','insurance','stamp_duty','handling_fee','agent_fee','electricity','water','garbage','other'];
 
   const GREEN = '#16a34a';
   const BLUE  = '#2563eb';
@@ -2927,6 +2933,7 @@ async function renderSummary() {
         const dl = {};
         catOrder.forEach(k => {
           if (k === 'handling_fee') { dl[k] = '÷13'; return; }
+          if (k === 'agent_fee') { return; }
           if ((td.expShared[k]||0) > 0.005 && td.expSharedDivisors?.[k] > 1) { dl[k] = `÷${td.expSharedDivisors[k]}`; return; }
           if ((td.expProp[k]||0) > 0.005) {
             const divs = td.expPropDivisors?.[k];
@@ -3015,6 +3022,7 @@ async function renderSummary() {
     const divisorLabel = {};
     catOrder.forEach(k => {
       if (k === 'handling_fee') { divisorLabel[k] = '÷13'; return; }
+      if (k === 'agent_fee') { return; }
       if ((d.expShared[k] || 0) > 0.005 && d.expSharedDivisors?.[k] > 1) {
         divisorLabel[k] = `÷${d.expSharedDivisors[k]}`;
       } else if ((d.expProp[k] || 0) > 0.005) {
