@@ -771,8 +771,15 @@ async function createBilling(req, res) {
   const d = req.body || {};
   const { room_id, billing_month, reading_date, elec_curr, water_curr, notes } = d;
 
-  const tenant = await DB.prepare(`SELECT * FROM tenants WHERE room_id=? AND active=1`).bind(room_id).first();
-  if (!tenant) return sendErr(res, 'No active tenant in this room');
+  const [bmY, bmM] = (billing_month || '').split('-').map(Number);
+  const firstDay = `${billing_month}-01`;
+  const lastDay  = `${billing_month}-${String(new Date(bmY, bmM, 0).getDate()).padStart(2, '0')}`;
+  const tenant = await DB.prepare(`
+    SELECT * FROM tenants WHERE room_id=?
+      AND (contract_start IS NULL OR contract_start <= ?)
+      AND (contract_end IS NULL OR contract_end >= ?)
+    ORDER BY active DESC, id DESC LIMIT 1`).bind(room_id, lastDay, firstDay).first();
+  if (!tenant) return sendErr(res, 'No tenant found for this room and billing month');
 
   const oldRow = await DB.prepare(`SELECT total_bill FROM meter_readings WHERE room_id=? AND billing_month=?`).bind(room_id, billing_month).first();
   const oldBill = oldRow?.total_bill || 0;
