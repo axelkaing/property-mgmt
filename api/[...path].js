@@ -509,6 +509,19 @@ async function getTenants(res, url) {
 
 async function updateTenant(req, res, id) {
   const d = req.body || {};
+
+  // Guard: block name changes on tenants with payment history to prevent
+  // silently overwriting one tenant's record with another person's details.
+  if (d.name !== undefined) {
+    const current = await DB.prepare(`SELECT name FROM tenants WHERE id=?`).bind(id).first();
+    if (current && d.name.trim() !== (current.name || '').trim()) {
+      const payCount = await DB.prepare(`SELECT COUNT(*) as n FROM payments WHERE tenant_id=?`).bind(id).first();
+      if (payCount?.n > 0) {
+        return sendErr(res, 'Cannot rename a tenant who has payment history. Archive this tenant first, then add the new tenant.', 409);
+      }
+    }
+  }
+
   await DB.prepare(`
     UPDATE tenants SET name=?, rent=?, elec_rate=?, water_type=?, water_rate=?,
       contract_start=?, contract_end=?, deposit=?, commission=?, phone=?, remark=?

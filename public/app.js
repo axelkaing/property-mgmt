@@ -898,6 +898,17 @@ async function saveTenantEdit(e) {
   const data = window._tenantDirData[window._editTenantRoom];
   if (!data || !data.tenant_id) { closeModal(); return; }
 
+  const newName = $$('te-name').value.trim();
+  if (newName && newName !== (data.name || '').trim()) {
+    const ok = confirm(
+      `You are changing the tenant name from "${data.name}" to "${newName}".\n\n` +
+      `If this is a NEW tenant moving into the unit, please close this form, ` +
+      `use the Archive button to close the current tenant's record, then Add New Tenant.\n\n` +
+      `Only continue if you are correcting a typo for the same person.`
+    );
+    if (!ok) return;
+  }
+
   await api.put(`/api/tenants/${data.tenant_id}`, {
     name:           $$('te-name').value,
     phone:          $$('te-phone').value || null,
