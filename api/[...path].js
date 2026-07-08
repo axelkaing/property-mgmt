@@ -924,9 +924,10 @@ async function getBillingPage(res, url) {
       FROM tenants t
       JOIN rooms r ON r.id = t.room_id
       JOIN properties p ON p.id = r.property_id
-      WHERE t.active = 1
+      WHERE (t.contract_start IS NULL OR SUBSTR(t.contract_start, 1, 7) <= ?)
+        AND (t.contract_end IS NULL OR SUBSTR(t.contract_end, 1, 7) >= ?)
         AND (p.hidden=0 OR p.hidden IS NULL)
-      ORDER BY p.sort_order, p.id, r.room_label`).all(),
+      ORDER BY p.sort_order, p.id, r.room_label`).bind(safeMonth, safeMonth).all(),
 
     DB.prepare(`SELECT * FROM properties WHERE (hidden=0 OR hidden IS NULL) ORDER BY sort_order, id`).all(),
 
