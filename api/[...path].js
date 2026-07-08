@@ -435,6 +435,8 @@ async function dashboard(res, url) {
         COALESCE((
           SELECT SUM(mr2.total_bill) FROM meter_readings mr2
           WHERE mr2.room_id = r.id AND mr2.billing_month < ? AND mr2.billing_month >= ?
+            AND (t.contract_start IS NULL OR mr2.billing_month >= SUBSTR(t.contract_start, 1, 7))
+            AND (t.contract_end IS NULL OR mr2.billing_month <= SUBSTR(t.contract_end, 1, 7))
         ), 0) - COALESCE((
           SELECT SUM(p2.amount) FROM payments p2
           WHERE p2.tenant_id = t.id AND p2.billing_month IS NOT NULL
@@ -855,7 +857,11 @@ async function deleteBilling(res, id) {
   if (bill?.tenant_id) {
     await DB.prepare(`
       UPDATE tenants SET outstanding_balance = (
-        COALESCE((SELECT SUM(mr.total_bill) FROM meter_readings mr WHERE mr.room_id = tenants.room_id), 0)
+        COALESCE((SELECT SUM(mr.total_bill) FROM meter_readings mr
+          WHERE mr.room_id = tenants.room_id
+            AND (tenants.contract_start IS NULL OR mr.billing_month >= SUBSTR(tenants.contract_start, 1, 7))
+            AND (tenants.contract_end IS NULL OR mr.billing_month <= SUBSTR(tenants.contract_end, 1, 7))
+        ), 0)
         - COALESCE((SELECT SUM(p.amount) FROM payments p WHERE p.tenant_id = tenants.id), 0)
       ) WHERE id=?`).bind(bill.tenant_id).run();
   }
@@ -865,7 +871,11 @@ async function deleteBilling(res, id) {
 async function recalcBalances(res) {
   await DB.prepare(`
     UPDATE tenants SET outstanding_balance = (
-      COALESCE((SELECT SUM(mr.total_bill) FROM meter_readings mr WHERE mr.room_id = tenants.room_id), 0)
+      COALESCE((SELECT SUM(mr.total_bill) FROM meter_readings mr
+        WHERE mr.room_id = tenants.room_id
+          AND (tenants.contract_start IS NULL OR mr.billing_month >= SUBSTR(tenants.contract_start, 1, 7))
+          AND (tenants.contract_end IS NULL OR mr.billing_month <= SUBSTR(tenants.contract_end, 1, 7))
+      ), 0)
       - COALESCE((SELECT SUM(p.amount) FROM payments p WHERE p.tenant_id = tenants.id), 0)
     )`).run();
   const rows = await DB.prepare(`
@@ -887,22 +897,45 @@ async function getBillingInvoice(res, url) {
 
   if (month < fyStart) return sendJson(res, { total_bill: null, outstanding_balance: 0, prev_billing_month: null, prev_outstanding: 0, fy_start: fyStart });
 
-  const [mr, tenant, firstBillingRow, prevMr, prevBalRow] = await Promise.all([
+  const [bmY, bmM] = month.split('-').map(Number);
+  const firstDay = `${month}-01`;
+  const lastDay  = `${month}-${String(new Date(bmY, bmM, 0).getDate()).padStart(2, '0')}`;
+
+  const [mr, tenant] = await Promise.all([
     DB.prepare(`SELECT total_bill FROM meter_readings WHERE room_id=? AND billing_month=?`).bind(roomId, month).first(),
-    DB.prepare(`SELECT outstanding_balance FROM tenants WHERE room_id=? AND active=1`).bind(roomId).first(),
-    DB.prepare(`SELECT MIN(billing_month) as first_month FROM meter_readings WHERE room_id=?`).bind(roomId).first(),
-    DB.prepare(`SELECT billing_month FROM meter_readings WHERE room_id=? AND billing_month<? AND billing_month>=? ORDER BY billing_month DESC LIMIT 1`).bind(roomId, month, fyStart).first(),
+    DB.prepare(`SELECT id, outstanding_balance, contract_start, contract_end FROM tenants
+      WHERE room_id=?
+        AND (contract_start IS NULL OR contract_start <= ?)
+        AND (contract_end IS NULL OR contract_end >= ?)
+      ORDER BY active DESC, id DESC LIMIT 1`).bind(roomId, lastDay, firstDay).first(),
+  ]);
+
+  if (!tenant) return sendJson(res, { total_bill: mr?.total_bill ?? null, outstanding_balance: 0, prev_billing_month: null, prev_outstanding: 0, fy_start: fyStart });
+
+  const [firstBillingRow, prevMr, prevBalRow] = await Promise.all([
+    DB.prepare(`SELECT MIN(billing_month) as first_month FROM meter_readings
+      WHERE room_id=?
+        AND (? IS NULL OR billing_month >= SUBSTR(?, 1, 7))
+        AND (? IS NULL OR billing_month <= SUBSTR(?, 1, 7))`
+    ).bind(roomId, tenant.contract_start, tenant.contract_start, tenant.contract_end, tenant.contract_end).first(),
+    DB.prepare(`SELECT billing_month FROM meter_readings
+      WHERE room_id=? AND billing_month<? AND billing_month>=?
+        AND (? IS NULL OR billing_month >= SUBSTR(?, 1, 7))
+        AND (? IS NULL OR billing_month <= SUBSTR(?, 1, 7))
+      ORDER BY billing_month DESC LIMIT 1`
+    ).bind(roomId, month, fyStart, tenant.contract_start, tenant.contract_start, tenant.contract_end, tenant.contract_end).first(),
     DB.prepare(`
       SELECT
         COALESCE((SELECT SUM(mr2.total_bill) FROM meter_readings mr2
           WHERE mr2.room_id=? AND mr2.billing_month < ? AND mr2.billing_month >= ?
+            AND (? IS NULL OR mr2.billing_month >= SUBSTR(?, 1, 7))
+            AND (? IS NULL OR mr2.billing_month <= SUBSTR(?, 1, 7))
         ), 0)
         - COALESCE((SELECT SUM(p.amount) FROM payments p
-          JOIN tenants t ON t.id=p.tenant_id
-          WHERE t.room_id=? AND p.billing_month IS NOT NULL
+          WHERE p.tenant_id=? AND p.billing_month IS NOT NULL
             AND p.billing_month < ? AND p.billing_month >= ?
         ), 0) as prev_outstanding
-    `).bind(roomId, month, fyStart, roomId, month, fyStart).first(),
+    `).bind(roomId, month, fyStart, tenant.contract_start, tenant.contract_start, tenant.contract_end, tenant.contract_end, tenant.id, month, fyStart).first(),
   ]);
 
   const firstBillingMonth = firstBillingRow?.first_month ?? null;
@@ -1219,13 +1252,15 @@ async function deletePayment(res, id) {
     await DB.prepare(`DELETE FROM payments WHERE id=?`).bind(id).run();
   }
   if (pay?.tenant_id) {
-    const tenant = await DB.prepare(`SELECT room_id FROM tenants WHERE id=?`).bind(pay.tenant_id).first();
-    if (tenant?.room_id) {
-      const billSum = await DB.prepare(`SELECT COALESCE(SUM(total_bill),0) as s FROM meter_readings WHERE room_id=?`).bind(tenant.room_id).first();
-      const paySum  = await DB.prepare(`SELECT COALESCE(SUM(amount),0) as s FROM payments WHERE tenant_id=?`).bind(pay.tenant_id).first();
-      await DB.prepare(`UPDATE tenants SET outstanding_balance=? WHERE id=?`)
-        .bind((billSum?.s || 0) - (paySum?.s || 0), pay.tenant_id).run();
-    }
+    await DB.prepare(`
+      UPDATE tenants SET outstanding_balance = (
+        COALESCE((SELECT SUM(mr.total_bill) FROM meter_readings mr
+          WHERE mr.room_id = tenants.room_id
+            AND (tenants.contract_start IS NULL OR mr.billing_month >= SUBSTR(tenants.contract_start, 1, 7))
+            AND (tenants.contract_end IS NULL OR mr.billing_month <= SUBSTR(tenants.contract_end, 1, 7))
+        ), 0)
+        - COALESCE((SELECT SUM(p.amount) FROM payments p WHERE p.tenant_id = tenants.id), 0)
+      ) WHERE id=?`).bind(pay.tenant_id).run();
   }
   return sendJson(res, { success: true });
 }
