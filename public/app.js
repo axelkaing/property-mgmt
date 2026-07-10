@@ -1462,7 +1462,7 @@ async function renderPayments() {
   properties.forEach(p => { propByCode[p.code] = p; });
 
   const tenantOptions = tenants.map(t_ =>
-    `<option value="${t_.id}" ${tenantFilter == t_.id ? 'selected' : ''}>${fmtUnit(t_.property_code, t_.room_label)}</option>`
+    `<option value="${t_.id}" ${tenantFilter == t_.id ? 'selected' : ''}>${fmtUnit(t_.property_code, t_.room_label)} — ${t_.name}</option>`
   ).join('');
 
   const sortedPayments = [...payments].sort((a, b) => {
@@ -2016,6 +2016,14 @@ ${meterTableHtml ? `<p style="font-weight:700;font-size:12px;margin-bottom:6px;t
   win.document.close();
 }
 
+// ── Expense unit structure — single source of truth for filter AND Add Expense modal ──
+const EXP_UNIT_TREE = [
+  { code: '2F/WS', rooms: ['2F/WS-A', '2F/WS-B', '2F/WS-C'] },
+  { code: '3F/KC', rooms: ['3F/KC-A', '3F/KC-B', '3F/KC-C'] },
+  { code: '4F/KS', rooms: ['4F/KS-A', '4F/KS-B', '4F/KS-C', '4F/KS-D', '4F/KS-E'] },
+];
+const EXP_FLAT_PROPS = ['5F/SH', 'CarP P99'];
+
 // ── Expenses ─────────────────────────────────────────────────────────────────
 
 function expUnitLabel(e) {
@@ -2044,26 +2052,18 @@ async function renderExpenses() {
   const grandTotal = expenses.reduce((s, e) => s + e.amount, 0);
 
   // ── Unit filter dropdown: grouped by property ──
-  const PROP_TREE = [
-    { label: '2F/WS', children: ['2F/WS-A', '2F/WS-B', '2F/WS-C'] },
-    { label: '3F/KC', children: ['3F/KC-A', '3F/KC-B', '3F/KC-C'] },
-    { label: '4F/KS', children: ['4F/KS-A', '4F/KS-B', '4F/KS-C', '4F/KS-D', '4F/KS-E'] },
-  ];
-  const FLAT_UNITS = ['5F/SH', 'CarP P99', 'General'];
   const unitOptions = [
-    ...PROP_TREE.map(g => `<optgroup label="${g.label}">
-      <option value="${g.label}" ${expUnit === g.label ? 'selected' : ''}>${g.label}</option>
-      ${g.children.map(c => `<option value="${c}" ${expUnit === c ? 'selected' : ''}>${c}</option>`).join('')}
+    ...EXP_UNIT_TREE.map(g => `<optgroup label="${g.code}">
+      <option value="${g.code}" ${expUnit === g.code ? 'selected' : ''}>${g.code}</option>
+      ${g.rooms.map(c => `<option value="${c}" ${expUnit === c ? 'selected' : ''}>${c}</option>`).join('')}
     </optgroup>`),
-    ...FLAT_UNITS.map(u => `<option value="${u}" ${expUnit === u ? 'selected' : ''}>${u}</option>`),
+    ...[...EXP_FLAT_PROPS, 'General'].map(u => `<option value="${u}" ${expUnit === u ? 'selected' : ''}>${u}</option>`),
   ].join('');
 
   // ── Property-level filter expands to include all child units ──
-  const PROP_CHILDREN = {
-    '2F/WS': new Set(['2F/WS', '2F/WS-A', '2F/WS-B', '2F/WS-C']),
-    '3F/KC': new Set(['3F/KC', '3F/KC-A', '3F/KC-B', '3F/KC-C']),
-    '4F/KS': new Set(['4F/KS', '4F/KS-A', '4F/KS-B', '4F/KS-C', '4F/KS-D', '4F/KS-E']),
-  };
+  const PROP_CHILDREN = Object.fromEntries(
+    EXP_UNIT_TREE.map(g => [g.code, new Set([g.code, ...g.rooms])])
+  );
 
   let detailExpenses = expenses;
   if (expUnit) {
@@ -2215,49 +2215,48 @@ async function renderExpenses() {
 }
 
 function showAddExpense() {
-  Promise.all([
-    api.get('/api/properties'),
-    api.get('/api/tenants'),
-  ]).then(([properties, rooms]) => {
-    const roomsByProp = {};
-    rooms.forEach(r => {
-      if (!roomsByProp[r.property_id]) roomsByProp[r.property_id] = [];
-      roomsByProp[r.property_id].push(r);
-    });
+  api.get('/api/properties').then(properties => {
+    // Map property code → DB row so we can look up IDs from EXP_UNIT_TREE.
+    const propsByCode = {};
+    properties.forEach(p => { propsByCode[p.code] = p; });
 
+    // Build the unit dropdown from EXP_UNIT_TREE — same structure as the main filter,
+    // so both dropdowns are always in sync and never produce duplicates from tenant history.
     let propOpts = '';
-    properties.forEach(p => {
-      const pRooms = roomsByProp[p.id] || [];
-      if (pRooms.length > 1) {
-        const roomInner = pRooms.map(r => {
-          const ul = fmtUnit(r.property_code, r.room_label);
-          return `<option value="${r.property_id}|${ul}">${ul}</option>`;
-        }).join('');
-        propOpts += `<optgroup label="${p.code}"><option value="${p.id}|${p.code}">${p.code}</option>${roomInner}</optgroup>`;
-      } else if (pRooms.length === 1) {
-        const r = pRooms[0];
-        const ul = fmtUnit(r.property_code, r.room_label);
-        propOpts += `<option value="${r.property_id}|${ul}">${ul}</option>`;
-      }
+    EXP_UNIT_TREE.forEach(g => {
+      const prop = propsByCode[g.code];
+      if (!prop) return;
+      const roomInner = g.rooms.map(ul => `<option value="${prop.id}|${ul}">${ul}</option>`).join('');
+      propOpts += `<optgroup label="${g.code}"><option value="${prop.id}|${g.code}">${g.code}</option>${roomInner}</optgroup>`;
+    });
+    EXP_FLAT_PROPS.forEach(code => {
+      const prop = propsByCode[code];
+      if (!prop) return;
+      propOpts += `<option value="${prop.id}|${code}">${code}</option>`;
     });
 
-    // Build unit checkboxes for the sharing section
+    // Build unit checkboxes for the sharing section — also from EXP_UNIT_TREE.
     let selectAllCount = 0;
     let unitGroupsHtml = '';
-    properties.forEach(p => {
-      const pRooms = roomsByProp[p.id] || [];
-      if (!pRooms.length) return;
-      const excluded = p.code === '4F/SH';
-      const items = pRooms.map(r => {
-        const ul = fmtUnit(r.property_code, r.room_label);
-        if (!excluded) selectAllCount++;
+    EXP_UNIT_TREE.forEach(g => {
+      const items = g.rooms.map(ul => {
+        selectAllCount++;
         return `<label style="display:flex;align-items:center;gap:5px;margin:2px 0;font-weight:normal;cursor:pointer;white-space:nowrap">
-          <input type="checkbox" class="exp-unit${excluded ? '' : ' exp-unit-all'}" value="${ul}"> ${ul}
+          <input type="checkbox" class="exp-unit exp-unit-all" value="${ul}"> ${ul}
         </label>`;
       }).join('');
       unitGroupsHtml += `<div style="margin-bottom:10px">
-        <div style="font-weight:600;font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px">${p.code}</div>
+        <div style="font-weight:600;font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px">${g.code}</div>
         ${items}
+      </div>`;
+    });
+    EXP_FLAT_PROPS.forEach(code => {
+      selectAllCount++;
+      unitGroupsHtml += `<div style="margin-bottom:10px">
+        <div style="font-weight:600;font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px">${code}</div>
+        <label style="display:flex;align-items:center;gap:5px;margin:2px 0;font-weight:normal;cursor:pointer;white-space:nowrap">
+          <input type="checkbox" class="exp-unit exp-unit-all" value="${code}"> ${code}
+        </label>
       </div>`;
     });
 
@@ -2919,7 +2918,7 @@ async function renderSummary() {
 
       const sn = name => {
         const p = (name || '').split(' ');
-        return (p.length > 1 && /^(Mr|Ms|Mrs|Dr)\.?$/i.test(p[0])) ? p[1] : p[0];
+        return (/^(Mr|Ms|Mrs|Dr)\.?$/i.test(p[0]) ? p.slice(1) : p).join(' ');
       };
 
       const mkPane = td => {

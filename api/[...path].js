@@ -441,13 +441,16 @@ async function dashboard(res, url) {
           SELECT SUM(p2.amount) FROM payments p2
           WHERE p2.tenant_id = t.id AND p2.billing_month IS NOT NULL
             AND p2.billing_month < ? AND p2.billing_month >= ?
+            AND (t.contract_start IS NULL OR p2.billing_month >= SUBSTR(t.contract_start, 1, 7))
         ), 0) as prev_outstanding
       FROM rooms r
-      LEFT JOIN tenants t ON t.room_id = r.id AND (t.active = 1 OR (t.active = 0 AND t.contract_end >= ?))
+      LEFT JOIN tenants t ON t.room_id = r.id
+        AND (t.contract_start IS NULL OR SUBSTR(t.contract_start, 1, 7) <= ?)
+        AND (t.active = 1 OR (t.active = 0 AND t.contract_end >= ?))
       LEFT JOIN meter_readings mr ON mr.room_id = r.id AND mr.billing_month = ?
       LEFT JOIN properties prop ON prop.id = r.property_id
       WHERE (prop.hidden=0 OR prop.hidden IS NULL)
-      ORDER BY prop.sort_order, prop.id, r.room_label`).bind(currentMonth, currentMonth, fyStart, currentMonth, fyStart, currentMonth, currentMonth).all(),
+      ORDER BY prop.sort_order, prop.id, r.room_label`).bind(currentMonth, currentMonth, fyStart, currentMonth, fyStart, currentMonth, currentMonth, currentMonth).all(),
 
     DB.prepare(`
       SELECT t.id, t.name, t.contract_end, t.contract_start,
