@@ -2022,7 +2022,10 @@ const EXP_UNIT_TREE = [
   { code: '3F/KC', rooms: ['3F/KC-A', '3F/KC-B', '3F/KC-C'] },
   { code: '4F/KS', rooms: ['4F/KS-A', '4F/KS-B', '4F/KS-C', '4F/KS-D', '4F/KS-E'] },
 ];
-const EXP_FLAT_PROPS = ['5F/SH', 'CarP P99'];
+const EXP_FLAT_PROPS = [
+  { dbCode: '5F/SH', label: '5F/SH'    },
+  { dbCode: 'CarP',  label: 'CarP P99' },
+];
 
 // ── Expenses ─────────────────────────────────────────────────────────────────
 
@@ -2057,7 +2060,7 @@ async function renderExpenses() {
       <option value="${g.code}" ${expUnit === g.code ? 'selected' : ''}>${g.code}</option>
       ${g.rooms.map(c => `<option value="${c}" ${expUnit === c ? 'selected' : ''}>${c}</option>`).join('')}
     </optgroup>`),
-    ...[...EXP_FLAT_PROPS, 'General'].map(u => `<option value="${u}" ${expUnit === u ? 'selected' : ''}>${u}</option>`),
+    ...[...EXP_FLAT_PROPS.map(f => f.label), 'General'].map(u => `<option value="${u}" ${expUnit === u ? 'selected' : ''}>${u}</option>`),
   ].join('');
 
   // ── Property-level filter expands to include all child units ──
@@ -2229,10 +2232,10 @@ function showAddExpense() {
       const roomInner = g.rooms.map(ul => `<option value="${prop.id}|${ul}">${ul}</option>`).join('');
       propOpts += `<optgroup label="${g.code}"><option value="${prop.id}|${g.code}">${g.code}</option>${roomInner}</optgroup>`;
     });
-    EXP_FLAT_PROPS.forEach(code => {
-      const prop = propsByCode[code];
+    EXP_FLAT_PROPS.forEach(({ dbCode, label }) => {
+      const prop = propsByCode[dbCode];
       if (!prop) return;
-      propOpts += `<option value="${prop.id}|${code}">${code}</option>`;
+      propOpts += `<option value="${prop.id}|${label}">${label}</option>`;
     });
 
     // Build unit checkboxes for the sharing section — also from EXP_UNIT_TREE.
@@ -2250,12 +2253,12 @@ function showAddExpense() {
         ${items}
       </div>`;
     });
-    EXP_FLAT_PROPS.forEach(code => {
+    EXP_FLAT_PROPS.forEach(({ label }) => {
       selectAllCount++;
       unitGroupsHtml += `<div style="margin-bottom:10px">
-        <div style="font-weight:600;font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px">${code}</div>
+        <div style="font-weight:600;font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px">${label}</div>
         <label style="display:flex;align-items:center;gap:5px;margin:2px 0;font-weight:normal;cursor:pointer;white-space:nowrap">
-          <input type="checkbox" class="exp-unit exp-unit-all" value="${code}"> ${code}
+          <input type="checkbox" class="exp-unit exp-unit-all" value="${label}"> ${label}
         </label>
       </div>`;
     });
