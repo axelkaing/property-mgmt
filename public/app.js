@@ -2402,6 +2402,44 @@ function editExpense(id) {
   const e = (S.data._expenses || []).find(x => x.id === id);
   if (!e) return;
   const unitLabel = expUnitLabel(e);
+  const isGeneral = e.property_id === null;
+
+  let savedSharedUnits = [];
+  if (e.is_shared) { try { savedSharedUnits = JSON.parse(e.shared_units || '[]'); } catch {} }
+
+  let selectAllCount = 0;
+  let unitGroupsHtml = '';
+  EXP_UNIT_TREE.forEach(g => {
+    const items = g.rooms.map(ul => {
+      selectAllCount++;
+      const chk = savedSharedUnits.includes(ul) ? 'checked' : '';
+      return `<label style="display:flex;align-items:center;gap:5px;margin:2px 0;font-weight:normal;cursor:pointer;white-space:nowrap">
+        <input type="checkbox" class="edit-exp-unit edit-exp-unit-all" value="${ul}" ${chk}> ${ul}
+      </label>`;
+    }).join('');
+    unitGroupsHtml += `<div style="margin-bottom:10px">
+      <div style="font-weight:600;font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px">${g.code}</div>
+      ${items}
+    </div>`;
+  });
+  EXP_FLAT_PROPS.forEach(({ label }) => {
+    selectAllCount++;
+    const chk = savedSharedUnits.includes(label) ? 'checked' : '';
+    unitGroupsHtml += `<div style="margin-bottom:10px">
+      <div style="font-weight:600;font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px">${label}</div>
+      <label style="display:flex;align-items:center;gap:5px;margin:2px 0;font-weight:normal;cursor:pointer;white-space:nowrap">
+        <input type="checkbox" class="edit-exp-unit edit-exp-unit-all" value="${label}" ${chk}> ${label}
+      </label>
+    </div>`;
+  });
+
+  const checkedCount = savedSharedUnits.length;
+  const selAllChecked = checkedCount === selectAllCount ? 'checked' : '';
+  const selAllIndeterminate = checkedCount > 0 && checkedCount < selectAllCount;
+  const shareNoneChecked   = !e.is_shared ? 'checked' : '';
+  const shareSharedChecked = e.is_shared  ? 'checked' : '';
+  const unitsDisplay = e.is_shared ? '' : 'none';
+
   openModal('✏ Edit Expense', `
     <form id="edit-exp-form" onsubmit="submitEditExpense(event, ${id})">
       <div class="form-grid">
@@ -2438,22 +2476,80 @@ function editExpense(id) {
           <label>${t('desc_lbl')}</label>
           <input type="text" id="edit-exp-desc" value="${e.description || ''}" placeholder="Optional" />
         </div>
+        <div id="edit-exp-sharing" class="form-group full" style="${isGeneral ? '' : 'display:none'}">
+          <label>Sharing</label>
+          <div style="display:flex;gap:20px;margin-bottom:10px">
+            <label style="display:flex;align-items:center;gap:6px;font-weight:normal;cursor:pointer">
+              <input type="radio" name="edit-exp-share" value="none" ${shareNoneChecked}> Non-shared
+            </label>
+            <label style="display:flex;align-items:center;gap:6px;font-weight:normal;cursor:pointer">
+              <input type="radio" name="edit-exp-share" value="shared" ${shareSharedChecked}> Shared among units
+            </label>
+          </div>
+          <div id="edit-exp-units" style="display:${unitsDisplay};background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 14px">
+            <label style="display:flex;align-items:center;gap:6px;margin-bottom:10px;cursor:pointer;font-weight:600">
+              <input type="checkbox" id="edit-exp-sel-all" ${selAllChecked}> Select all ${selectAllCount} units
+            </label>
+            <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:0 12px">
+              ${unitGroupsHtml}
+            </div>
+          </div>
+        </div>
       </div>
       <div class="modal-actions">
         <button type="button" class="btn btn-ghost" onclick="closeModal()">${t('cancel')}</button>
         <button type="submit" class="btn btn-primary">💾 ${t('save')}</button>
       </div>
     </form>`);
+
+  if (isGeneral) {
+    if (selAllIndeterminate) { $$('edit-exp-sel-all').indeterminate = true; }
+
+    document.querySelectorAll('[name="edit-exp-share"]').forEach(radio => {
+      radio.addEventListener('change', function () {
+        $$('edit-exp-units').style.display = this.value === 'shared' ? '' : 'none';
+      });
+    });
+
+    $$('edit-exp-sel-all').addEventListener('change', function () {
+      document.querySelectorAll('.edit-exp-unit-all').forEach(cb => { cb.checked = this.checked; });
+    });
+
+    document.querySelectorAll('.edit-exp-unit-all').forEach(cb => {
+      cb.addEventListener('change', function () {
+        const all     = document.querySelectorAll('.edit-exp-unit-all');
+        const checked = document.querySelectorAll('.edit-exp-unit-all:checked');
+        const selAll  = $$('edit-exp-sel-all');
+        selAll.indeterminate = checked.length > 0 && checked.length < all.length;
+        selAll.checked = checked.length === all.length;
+      });
+    });
+  }
 }
 
 async function submitEditExpense(event, id) {
   event.preventDefault();
+  const unitLabel = $$('edit-exp-unit').value.trim() || null;
+
+  let isShared = false;
+  let sharedUnits = null;
+  const sharingSection = $$('edit-exp-sharing');
+  if (sharingSection && sharingSection.style.display !== 'none') {
+    const shareRadio = document.querySelector('[name="edit-exp-share"]:checked');
+    if (shareRadio?.value === 'shared') {
+      isShared = true;
+      sharedUnits = Array.from(document.querySelectorAll('.edit-exp-unit:checked')).map(cb => cb.value);
+    }
+  }
+
   await api.put(`/api/expenses/${id}`, {
-    unit_label:   $$('edit-exp-unit').value.trim() || null,
+    unit_label:   unitLabel,
     expense_date: $$('edit-exp-date').value,
     category:     $$('edit-exp-cat').value,
     amount:       parseFloat($$('edit-exp-amount').value),
     description:  $$('edit-exp-desc').value.trim() || null,
+    is_shared:    isShared,
+    shared_units: sharedUnits,
   });
   closeModal();
   renderExpenses();

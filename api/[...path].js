@@ -1368,10 +1368,12 @@ async function createExpense(req, res) {
 
 async function updateExpense(req, res, id) {
   const d = req.body || {};
+  const isShared = d.is_shared ? 1 : 0;
+  const sharedUnits = d.shared_units ? JSON.stringify(d.shared_units) : null;
   await DB.prepare(`
-    UPDATE expenses SET expense_date=?, category=?, amount=?, description=?, unit_label=?
+    UPDATE expenses SET expense_date=?, category=?, amount=?, description=?, unit_label=?, is_shared=?, shared_units=?
     WHERE id=?`)
-    .bind(d.expense_date, d.category, parseFloat(d.amount), d.description || null, d.unit_label || null, id)
+    .bind(d.expense_date, d.category, parseFloat(d.amount), d.description || null, d.unit_label || null, isShared, sharedUnits, id)
     .run();
   return sendJson(res, { success: true });
 }
